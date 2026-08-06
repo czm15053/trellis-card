@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Trellis Card</title>
+<link rel="icon" href="favicon.ico" type="image/png" />
+<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="layout-variants.css" />
+<link rel="stylesheet" href="theme-variants.css" />
+<script src="vendor/gsap.min.js" defer></script>
+<script src="focus-policy.js" defer></script>
+<script src="activity-display.js" defer></script>
+<script src="app.js" defer></script>
+</head>
+<body data-mode="card" data-layout="original" data-theme="specimen">
+<div class="world" id="world">
+
+  <!-- 设置引导：首次启动时显示 -->
+  <section class="setup" id="setup" hidden>
+    <div class="setup-card">
+      <div class="setup-logo">Trellis Card</div>
+      <h1 class="setup-title">开始使用 Trellis Card</h1>
+      <p class="setup-desc">选择一种项目接入方式，之后也可以在设置中调整。</p>
+      <div class="setup-options" role="group" aria-label="项目接入方式">
+        <button type="button" class="setup-option" id="btnScanExisting">
+          <span class="setup-option-icon" aria-hidden="true"><svg class="lucide" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="icons.svg#i-list"/></svg></span>
+          <span class="setup-option-copy"><strong>扫描已有项目</strong><small>选择一个根目录，自动发现其中的 Trellis 项目。</small></span>
+          <svg class="lucide setup-option-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-chevron-right"/></svg>
+        </button>
+        <button type="button" class="setup-option" id="btnStartEmpty">
+          <span class="setup-option-icon" aria-hidden="true"><svg class="lucide" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="icons.svg#i-activity"/></svg></span>
+          <span class="setup-option-copy"><strong>从零开始</strong><small>先进入卡片；安装 Hook 后，Agent 运行 Trellis 项目时会自动导入。</small></span>
+          <svg class="lucide setup-option-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-chevron-right"/></svg>
+        </button>
+      </div>
+      <p class="setup-note">Hook 在设置中安装，一次接入即可观察多个项目。</p>
+    </div>
+  </section>
+
+  <!-- 主界面 -->
+  <div class="main-view" id="mainView" hidden>
+    <!-- 胶囊：固定 360×136 分区面板（拖动 / 内容回卡片 / 菜单 分离） -->
+    <div class="capsule" id="capsule" hidden data-kind="idle">
+      <div class="cap-top">
+        <div class="cap-drag" data-tauri-drag-region title="拖动移动窗口"></div>
+        <button type="button" class="cap-menu-btn" id="btnCapMenu" title="胶囊菜单" aria-label="打开胶囊菜单" aria-expanded="false" aria-controls="capMenuPop"><svg class="lucide" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-more-horizontal"/></svg></button>
+      </div>
+      <div class="cap-body" id="capBody" title="点击回到卡片">
+        <div class="cap-status">
+          <span class="orb" id="capOrb"></span>
+          <span class="cap-state" id="capState">空闲</span>
+          <span class="cap-project" id="capProject" title="当前项目"></span>
+          <span class="cap-progress" id="capProgress"></span>
+          <span class="cap-badge" id="capBadge" hidden>0</span>
+        </div>
+        <div class="cap-title" id="capTitle">—</div>
+        <div class="cap-activity" id="capActivity">—</div>
+        <div class="cap-bar" id="capBar" hidden><i id="capBarFill"></i></div>
+        <div class="cap-preview" id="capPreview" aria-hidden="true">
+          <div class="cap-preview-top">
+            <span class="cap-preview-state" id="capPreviewState">空闲</span>
+            <span class="cap-preview-phase" id="capPreviewPhase">—</span>
+            <span class="cap-preview-project" id="capPreviewProject"></span>
+            <span class="cap-preview-progress" id="capPreviewProgress"></span>
+          </div>
+          <div class="cap-preview-title" id="capPreviewTitle">—</div>
+          <div class="cap-preview-activity" id="capPreviewActivity">—</div>
+          <div class="cap-preview-excerpt" id="capPreviewExcerpt">—</div>
+        </div>
+      </div>
+      <div class="cap-menu-pop" id="capMenuPop" hidden>
+        <button type="button" class="cap-tool" id="btnCapToCard">回到卡片</button>
+        <button type="button" class="cap-tool" id="btnCapLock" aria-pressed="false">锁定当前任务</button>
+        <button type="button" class="cap-tool setting" id="btnCapAutoFollow" role="switch" aria-checked="true"><span>自动跟随</span><i aria-hidden="true">开</i></button>
+        <button type="button" class="cap-tool setting" id="btnCapTop" role="switch" aria-checked="false"><span>窗口置顶</span><i aria-hidden="true">关</i></button>
+        <button type="button" class="cap-tool danger" id="btnCapHide">隐藏</button>
+      </div>
+    </div>
+
+    <article class="card" id="card" data-kind="idle">
+      <div class="dragbar" data-tauri-drag-region title="拖动移动窗口"></div>
+
+      <!-- 顶栏：Project chip · List · Menu · Detail（避开拖动区中心） -->
+      <div class="card-topbar" id="cardTopbar">
+        <button type="button" class="proj-chip" id="btnProjectChip" aria-expanded="false" aria-controls="projectPop" title="筛选项目">
+          <span class="proj-chip-label" id="projectChipLabel">全部项目</span>
+          <span class="proj-chip-caret" aria-hidden="true"><svg class="lucide" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="icons.svg#i-chevron-down"/></svg></span>
+        </button>
+        <div class="topbar-actions">
+          <button type="button" class="iconbtn" id="btnTree" title="任务列表（L）" aria-label="打开任务列表" aria-expanded="false" aria-controls="list"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-list"/></svg><span>列表</span></button>
+          <button type="button" class="iconbtn menubtn" id="btnMenu" title="观察菜单" aria-label="打开观察菜单" aria-expanded="false" aria-controls="menuPop"><svg class="lucide" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-menu"/></svg></button>
+          <button type="button" class="iconbtn flipbtn" id="btnFlip" title="详情" aria-label="打开任务详情"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-book-open"/></svg><span>详情</span></button>
+        </div>
+      </div>
+
+      <!-- 项目筛选 popover（与 Tree 顶栏同一 filter 数据源） -->
+      <div class="project-pop" id="projectPop" hidden role="listbox" aria-label="筛选项目"></div>
+
+      <!-- 主菜单 scrim -->
+      <div class="menu-scrim" id="menuScrim" hidden></div>
+
+      <!-- 运行时播报区：只播报状态变化与重要提醒 -->
+      <div id="runtimeAnnouncer" class="sr-only" aria-live="polite"></div>
+
+      <!-- 观察菜单：观察 / 视图 / 设置 / 危险（无 stars） -->
+      <div class="menu-pop" id="menuPop" hidden>
+        <div class="mp-group">
+          <div class="mp-label">观察</div>
+          <button type="button" class="mp-row setting" id="btnAutoFollow" role="switch" aria-checked="true" title="重要状态是否自动切换任务">
+            <span class="mp-label-wrap"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-activity"/></svg>自动跟随</span><i aria-hidden="true">开</i>
+          </button>
+          <button type="button" class="mp-row setting" id="btnTop" role="switch" aria-checked="false" title="窗口是否始终浮在其他应用之上">
+            <span class="mp-label-wrap"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-pin"/></svg>窗口置顶</span><i aria-hidden="true">关</i>
+          </button>
+        </div>
+        <div class="mp-group">
+          <div class="mp-label">视图</div>
+          <button type="button" class="mp-row" id="btnRefresh" title="快捷键 R"><span class="mp-label-wrap"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-refresh"/></svg>刷新</span></button>
+          <button type="button" class="mp-row" id="btnCapsule" title="快捷键 C"><span class="mp-label-wrap"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-panel-bottom"/></svg>进入胶囊</span></button>
+        </div>
+        <div class="mp-group">
+          <div class="mp-label">主题</div>
+          <button type="button" class="mp-row" id="btnTheme" title="切换主题" aria-haspopup="dialog" aria-expanded="false" aria-controls="themePop">
+            <span class="mp-label-wrap"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-palette"/></svg>主题</span><i id="themeName">标本卡</i>
+          </button>
+        </div>
+        <div class="mp-group">
+          <div class="mp-label">配置</div>
+          <button type="button" class="mp-row" id="btnAdmin" title="根目录与项目" aria-expanded="false" aria-controls="admin">
+            <span class="mp-label-wrap"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-settings"/></svg>设置</span><em aria-hidden="true"><svg class="lucide" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="icons.svg#i-chevron-right"/></svg></em>
+          </button>
+        </div>
+        <div class="mp-div"></div>
+        <button type="button" class="mp-row danger" id="btnHide" title="隐藏到托盘"><span class="mp-label-wrap"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-eye-off"/></svg>隐藏窗口</span></button>
+      </div>
+
+      <!-- 主题选择器：仅改变视觉 token，不改变 Trellis 信息结构 -->
+      <div class="theme-pop" id="themePop" hidden role="dialog" aria-label="选择主题" aria-modal="false">
+        <div class="theme-pop-head"><span>主题</span><span id="themeCount">20 styles</span></div>
+        <div class="theme-grid" id="themeChoices"></div>
+      </div>
+
+      <!-- 状态元信息移出菜单，避免撑高/裁切；仍可供读屏与脚本读取 -->
+      <div class="card-status" id="status" aria-live="polite">加载中…</div>
+
+      <div class="flip" id="flip">
+        <div class="flip-inner" id="flipInner">
+          <!-- 正面：聚焦任务 -->
+          <div class="face front grid" id="grid">
+            <div class="post" id="post" aria-hidden="true"></div>
+            <div class="main" id="main"></div>
+          </div>
+          <!-- 背面：Inspect Detail | Evidence -->
+          <div class="face back" id="back"></div>
+        </div>
+      </div>
+
+      <!-- 任务树 sheet（导航） -->
+      <div class="sheet list" id="list" aria-hidden="true">
+        <div class="list-h">
+          <span>任务树</span>
+          <span class="sheet-h-right">
+            <span id="listCount">0</span>
+            <button type="button" class="mini sheet-close" id="btnTreeClose" title="关闭">收起</button>
+          </span>
+        </div>
+        <div class="sheet-filters stars" id="treeStars" aria-label="项目筛选"></div>
+        <ul class="tree" id="tree"></ul>
+      </div>
+
+      <!-- 设置 sheet（配置；原项目管理） -->
+      <div class="sheet admin settings" id="admin" aria-hidden="true">
+        <div class="list-h">
+          <span>设置</span>
+          <button type="button" class="mini sheet-close" id="btnAdminClose" title="关闭">收起</button>
+        </div>
+        <div id="adminBody"></div>
+      </div>
+    </article>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+</body>
+</html>

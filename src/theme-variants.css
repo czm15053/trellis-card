@@ -1,0 +1,388 @@
+/* UI-Prompt inspired themes.
+   Themes change surface, type, geometry, texture, and state accents only.
+   Trellis data hierarchy and the read-only interaction contract stay shared. */
+
+body[data-theme] {
+  --theme-card-bg: #0e1119;
+  --theme-card-border: var(--line2);
+  --theme-card-shadow: 0 30px 60px rgba(0,0,0,.55), 0 0 90px color-mix(in srgb,var(--accent,var(--amber)) 11%,transparent);
+  --theme-panel-bg: rgba(255,255,255,.025);
+  --theme-control-bg: rgba(15,17,25,.72);
+  --theme-pop-bg: #121722;
+  --theme-rail-bg: #0d0f15;
+  --theme-preview-bg: #10131b;
+  --theme-card-highlight: transparent;
+  --theme-card-bottom: transparent;
+  --theme-radius: 22px;
+  --theme-block-radius: 10px;
+  --theme-filter: none;
+}
+
+/* Shared component hooks. These are intentionally after styles.css and
+   layout-variants.css so a theme can be switched without changing markup. */
+body[data-theme] .card {
+  background: var(--theme-card-bg);
+  border-color: var(--theme-card-border);
+  border-radius: var(--theme-radius);
+  box-shadow: var(--theme-card-shadow);
+  filter: var(--theme-filter);
+}
+body[data-theme] .card::before{background:var(--theme-card-highlight);opacity:1}
+body[data-theme] .card::after{background:var(--theme-card-bottom);opacity:1}
+body[data-theme] .post{background:var(--theme-rail-bg)}
+body[data-theme] .proj-chip,
+body[data-theme] .iconbtn{background:var(--theme-control-bg)}
+body[data-theme] .project-pop,
+body[data-theme] .card>.menu-pop,
+body[data-theme] .cap-menu-pop{background:var(--theme-pop-bg)}
+body[data-theme] .capsule{
+  background:var(--theme-card-bg);
+  border-color:var(--theme-card-border);
+  border-radius:var(--theme-radius);
+  box-shadow:var(--theme-card-shadow);
+}
+body[data-theme] .cap-preview{background:var(--theme-preview-bg)}
+body[data-theme] .face.back{background:var(--theme-card-bg)}
+body[data-theme] .runtime-hero,
+body[data-theme] .subs,
+body[data-theme] .runtime-evidence{background:var(--theme-panel-bg);border-radius:var(--theme-block-radius)}
+body[data-theme] .excerpt{color:var(--chalk)}
+body[data-theme] .mp-row,
+body[data-theme] .cap-tool{background:color-mix(in srgb,var(--theme-panel-bg) 74%,transparent)}
+body[data-theme] .mp-row:hover,
+body[data-theme] .cap-tool:hover{background:color-mix(in srgb,var(--accent) 10%,var(--theme-panel-bg))}
+body[data-theme] .theme-pop{background:var(--theme-pop-bg)}
+body[data-theme] .theme-choice{background:color-mix(in srgb,var(--theme-panel-bg) 82%,transparent)}
+body[data-theme] .theme-choice:hover,
+body[data-theme] .theme-choice[aria-pressed="true"]{background:color-mix(in srgb,var(--accent) 13%,var(--theme-panel-bg))}
+
+/* Theme picker: a compact palette sheet, separate from the observation data. */
+body[data-theme] .card>.theme-pop{
+  position:absolute;top:44px;left:10px;right:10px;z-index:8;
+  display:flex;flex-direction:column;gap:8px;max-height:calc(100% - 54px);overflow:auto;
+  padding:10px;border:1px solid var(--line2);border-radius:12px;
+  box-shadow:0 22px 48px rgba(0,0,0,.42);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)
+}
+.theme-pop-head{display:flex;align-items:baseline;justify-content:space-between;padding:0 2px;color:var(--chalk);font-family:var(--serif);font-size:14px;font-weight:700}
+.theme-pop-head span+span{font-family:var(--mono);font-size:8px;font-weight:600;letter-spacing:.08em;color:var(--dim);text-transform:uppercase}
+.theme-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+.theme-choice{
+  min-width:0;display:grid;grid-template-columns:22px minmax(0,1fr);grid-template-rows:auto auto;column-gap:7px;align-items:center;
+  padding:6px 7px;border:1px solid var(--line);border-radius:8px;color:var(--mist);text-align:left;cursor:pointer;
+  font-family:var(--font);transition:color .16s,border-color .16s,background .16s,transform .16s
+}
+.theme-choice:hover{color:var(--chalk);border-color:var(--line2);transform:translateY(-1px)}
+.theme-choice[aria-pressed="true"]{color:var(--chalk);border-color:color-mix(in srgb,var(--accent) 60%,var(--line2));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 25%,transparent)}
+.theme-swatch{grid-row:1 / span 2;width:22px;height:22px;border-radius:6px;background:var(--swatch-a);border:1px solid color-mix(in srgb,var(--swatch-b) 70%,#fff);box-shadow:inset -7px 0 0 var(--swatch-b),0 2px 5px rgba(0,0,0,.12)}
+.theme-choice-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:700;line-height:1.2}
+.theme-choice-meta{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:7.5px;color:var(--dim);line-height:1.2}
+@media (max-width:320px){
+  .theme-grid{grid-template-columns:1fr}
+  body[data-theme] .card>.theme-pop{left:6px;right:6px}
+}
+
+/* Native Trellis specimen card: the baseline for all comparisons. */
+body[data-theme="specimen"]{
+  --ink:#08090d;--ink2:#0d0f15;--chalk:#eceae2;--mist:#a6a7ae;--dim:#63656e;
+  --line:rgba(236,234,226,.07);--line2:rgba(236,234,226,.13);
+  --amber:#f0a35e;--violet:#8b7cf6;--mint:#45c4a0;--rose:#f07178;--wrap:#ff8f5a;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+  --serif:ui-serif,"Iowan Old Style","Songti SC","STSong","Times New Roman",serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","PingFang SC",monospace;
+  --theme-card-bg:#0e1119;--theme-card-border:rgba(236,234,226,.13);
+  --theme-panel-bg:rgba(255,255,255,.025);--theme-control-bg:rgba(15,17,25,.72);
+  --theme-pop-bg:#121722;--theme-rail-bg:#0d0f15;--theme-preview-bg:#10131b;
+  --theme-card-shadow:0 30px 60px rgba(0,0,0,.55),0 0 90px color-mix(in srgb,var(--accent) 11%,transparent);
+  --theme-card-highlight:radial-gradient(ellipse at 50% 0%,color-mix(in srgb,var(--accent) 26%,transparent),transparent 70%);
+  --theme-card-bottom:radial-gradient(ellipse at 50% 100%,color-mix(in srgb,var(--accent) 22%,transparent),transparent 72%);
+  --theme-radius:22px;--theme-block-radius:10px
+}
+
+/* UI-Prompt core: Minimalism. */
+body[data-theme="minimalism"]{
+  --ink:#f7f6f1;--ink2:#ffffff;--chalk:#1a1a18;--mist:#5b5b57;--dim:#8b8a83;
+  --line:rgba(26,26,24,.10);--line2:rgba(26,26,24,.20);
+  --amber:#a66522;--violet:#5d5a8c;--mint:#23765d;--rose:#ad3f49;--wrap:#98552d;
+  --font:Arial,"Helvetica Neue","PingFang SC",sans-serif;--serif:Georgia,"Songti SC",serif;
+  --theme-card-bg:#f5f4ef;--theme-card-border:rgba(26,26,24,.16);--theme-panel-bg:#eeece5;
+  --theme-control-bg:#f8f7f2;--theme-pop-bg:#fffef9;--theme-rail-bg:#efeee8;--theme-preview-bg:#f2f0e9;
+  --theme-card-shadow:0 18px 42px rgba(31,29,23,.14);--theme-radius:5px;--theme-block-radius:5px;
+}
+body[data-theme="minimalism"] .card::before,body[data-theme="minimalism"] .card::after{display:none}
+body[data-theme="minimalism"] .runtime-hero{border-left:2px solid var(--accent);border-radius:0}
+body[data-theme="minimalism"] .excerpt{font-style:normal;color:var(--chalk)}
+
+/* UI-Prompt retro: Swiss Design. */
+body[data-theme="swiss"]{
+  --ink:#f5f5f2;--ink2:#fff;--chalk:#101010;--mist:#4e4e4e;--dim:#858585;
+  --line:rgba(16,16,16,.12);--line2:rgba(16,16,16,.26);
+  --amber:#e2463c;--violet:#285aa8;--mint:#16856d;--rose:#b92832;--wrap:#df7b2d;
+  --font:Arial,"Helvetica Neue","PingFang SC",sans-serif;--serif:Arial,"Helvetica Neue","PingFang SC",sans-serif;
+  --theme-card-bg:#f7f7f4;--theme-card-border:#111;--theme-panel-bg:#eeeeea;
+  --theme-control-bg:#fff;--theme-pop-bg:#fafaf7;--theme-rail-bg:#ededE8;--theme-preview-bg:#f0f0eb;
+  --theme-card-shadow:8px 8px 0 #e2463c;--theme-radius:0;--theme-block-radius:0;
+}
+body[data-theme="swiss"] .card{border-width:1.5px}
+body[data-theme="swiss"] .title{font-weight:800;letter-spacing:-.02em}
+body[data-theme="swiss"] .quote-label,body[data-theme="swiss"] .repo{text-transform:uppercase;letter-spacing:.18em}
+body[data-theme="swiss"] .runtime-hero,body[data-theme="swiss"] .subs{border-left:4px solid var(--accent);border-radius:0}
+
+/* UI-Prompt visual: Industrial Design. */
+body[data-theme="industrial"]{
+  --ink:#121517;--ink2:#181c1f;--chalk:#f1eee4;--mist:#a9aaa4;--dim:#6f7475;
+  --line:rgba(241,238,228,.11);--line2:rgba(241,238,228,.22);
+  --amber:#d99a45;--violet:#8e9fd8;--mint:#61c4a0;--rose:#ed6870;--wrap:#d67842;
+  --font:"Arial Narrow",Arial,"PingFang SC",sans-serif;--serif:Georgia,"Songti SC",serif;
+  --theme-card-bg:#171b1e;--theme-card-border:#687174;--theme-panel-bg:#202528;
+  --theme-control-bg:#1c2124;--theme-pop-bg:#1b2023;--theme-rail-bg:#14181a;--theme-preview-bg:#202528;
+  --theme-card-shadow:0 18px 0 rgba(0,0,0,.32),inset 0 0 0 1px rgba(255,255,255,.04);
+  --theme-radius:2px;--theme-block-radius:2px;
+}
+body[data-theme="industrial"] .title{font-family:var(--mono);font-size:18px;text-transform:uppercase;letter-spacing:.025em}
+body[data-theme="industrial"] .runtime-hero,body[data-theme="industrial"] .subs{border-radius:2px;border-style:solid}
+body[data-theme="industrial"] .chip,body[data-theme="industrial"] .live{border-radius:2px}
+
+/* UI-Prompt visual: Blueprint. */
+body[data-theme="blueprint"]{
+  --ink:#08243a;--ink2:#0b2b46;--chalk:#dff2ff;--mist:#9bc1d5;--dim:#6d9ab2;
+  --line:rgba(210,239,255,.15);--line2:rgba(210,239,255,.30);
+  --amber:#ffd36b;--violet:#a4b2ff;--mint:#68e0bc;--rose:#ff7d7d;--wrap:#74d7f2;
+  --font:Arial,"PingFang SC",sans-serif;--serif:Georgia,"Songti SC",serif;
+  --theme-card-bg:repeating-linear-gradient(0deg,transparent 0 23px,rgba(151,210,242,.055) 24px),repeating-linear-gradient(90deg,transparent 0 23px,rgba(151,210,242,.055) 24px),#0b2941;
+  --theme-card-border:#5e9cbd;--theme-panel-bg:rgba(126,196,229,.09);--theme-control-bg:rgba(7,35,56,.78);
+  --theme-pop-bg:#0d304b;--theme-rail-bg:rgba(5,27,44,.72);--theme-preview-bg:#0b2e49;
+  --theme-card-shadow:0 18px 42px rgba(0,15,30,.44),inset 0 0 0 1px rgba(173,225,247,.08);
+  --theme-radius:4px;--theme-block-radius:3px;
+}
+body[data-theme="blueprint"] .card::before,body[data-theme="blueprint"] .card::after{display:none}
+body[data-theme="blueprint"] .runtime-hero,body[data-theme="blueprint"] .subs{border:1px solid var(--line2);border-radius:3px}
+body[data-theme="blueprint"] .title{font-family:var(--mono);font-size:18px;letter-spacing:.02em}
+
+/* UI-Prompt visual: Sci-Fi HUD. */
+body[data-theme="sci-fi-hud"]{
+  --ink:#071313;--ink2:#0b1b1a;--chalk:#d8fff0;--mist:#8db7a9;--dim:#51756d;
+  --line:rgba(117,237,205,.13);--line2:rgba(117,237,205,.28);
+  --amber:#f2d36c;--violet:#a6a0ff;--mint:#4be2bc;--rose:#ff727e;--wrap:#65c9ff;
+  --font:var(--mono);--serif:var(--mono);
+  --theme-card-bg:#0b1b1a;--theme-card-border:#4e9c8c;--theme-panel-bg:rgba(73,222,188,.08);
+  --theme-control-bg:#0d211f;--theme-pop-bg:#0b211f;--theme-rail-bg:#081513;--theme-preview-bg:#0c2320;
+  --theme-card-shadow:0 0 0 1px rgba(78,217,181,.12),0 18px 42px rgba(0,0,0,.5),inset 0 0 28px rgba(58,202,173,.06);
+  --theme-radius:3px;--theme-block-radius:2px;
+}
+body[data-theme="sci-fi-hud"] .runtime-hero,body[data-theme="sci-fi-hud"] .subs{border-radius:2px;border:1px solid var(--line2)}
+body[data-theme="sci-fi-hud"] .title{font-size:18px;letter-spacing:.03em;text-transform:uppercase}
+body[data-theme="sci-fi-hud"] .card-topbar .iconbtn,body[data-theme="sci-fi-hud"] .proj-chip{border-radius:2px}
+
+/* UI-Prompt visual: Neon Cyberpunk. */
+body[data-theme="neon-cyberpunk"]{
+  --ink:#0c0717;--ink2:#140b24;--chalk:#f9f1ff;--mist:#c1a9d2;--dim:#806d94;
+  --line:rgba(239,113,212,.13);--line2:rgba(239,113,212,.28);
+  --amber:#ffd26b;--violet:#bc87ff;--mint:#3aefc7;--rose:#ff4f8b;--wrap:#ff804d;
+  --font:Arial,"PingFang SC",sans-serif;--serif:Georgia,"Songti SC",serif;
+  --theme-card-bg:#130d24;--theme-card-border:#63477f;--theme-panel-bg:rgba(224,63,171,.09);
+  --theme-control-bg:#160d29;--theme-pop-bg:#180d2d;--theme-rail-bg:#10091d;--theme-preview-bg:#1b0e30;
+  --theme-card-shadow:0 0 0 1px rgba(234,67,183,.18),0 18px 48px rgba(0,0,0,.58),0 0 34px rgba(196,79,255,.15);
+  --theme-radius:4px;--theme-block-radius:4px;
+}
+body[data-theme="neon-cyberpunk"] .title{text-shadow:2px 0 rgba(42,231,255,.28);letter-spacing:.01em}
+body[data-theme="neon-cyberpunk"] .runtime-hero,body[data-theme="neon-cyberpunk"] .subs{border-color:color-mix(in srgb,var(--accent) 45%,var(--line2))}
+
+/* UI-Prompt visual: Glassmorphism. */
+body[data-theme="glassmorphism"]{
+  --ink:#0b1120;--ink2:#111b30;--chalk:#eef5ff;--mist:#b1bfd5;--dim:#75839a;
+  --line:rgba(231,243,255,.14);--line2:rgba(231,243,255,.27);
+  --amber:#f4c86a;--violet:#b49bff;--mint:#63e2c1;--rose:#ff7d91;--wrap:#72c9ff;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;--serif:Georgia,"Songti SC",serif;
+  --theme-card-bg:rgba(18,28,48,.76);--theme-card-border:rgba(225,241,255,.32);--theme-panel-bg:rgba(255,255,255,.085);
+  --theme-control-bg:rgba(17,28,48,.60);--theme-pop-bg:rgba(16,27,48,.88);--theme-rail-bg:rgba(9,17,31,.45);--theme-preview-bg:rgba(18,31,53,.91);
+  --theme-card-shadow:0 24px 60px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.16);
+  --theme-radius:18px;--theme-block-radius:12px;--theme-filter:none;
+}
+body[data-theme="glassmorphism"] .card,body[data-theme="glassmorphism"] .capsule{backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+body[data-theme="glassmorphism"] .card::before{background:linear-gradient(120deg,rgba(255,255,255,.15),transparent 44%)}
+body[data-theme="glassmorphism"] .runtime-hero,body[data-theme="glassmorphism"] .subs{border-color:rgba(255,255,255,.18)}
+
+/* UI-Prompt visual: Soft UI. */
+body[data-theme="soft-ui"]{
+  --ink:#e8eef2;--ink2:#f1f5f7;--chalk:#26333c;--mist:#61717b;--dim:#8d9ba3;
+  --line:rgba(48,63,73,.10);--line2:rgba(48,63,73,.20);
+  --amber:#b66a2f;--violet:#6f6bb2;--mint:#2b856f;--rose:#b34856;--wrap:#b76b44;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;--serif:Georgia,"Songti SC",serif;
+  --theme-card-bg:#e8eef2;--theme-card-border:transparent;--theme-panel-bg:#e8eef2;
+  --theme-control-bg:#e8eef2;--theme-pop-bg:#e8eef2;--theme-rail-bg:#e2e9ed;--theme-preview-bg:#e9eff2;
+  --theme-card-shadow:14px 14px 26px rgba(94,112,124,.20),-12px -12px 24px rgba(255,255,255,.76);
+  --theme-radius:22px;--theme-block-radius:15px;
+}
+body[data-theme="soft-ui"] .card,body[data-theme="soft-ui"] .capsule{border:0}
+body[data-theme="soft-ui"] .runtime-hero,body[data-theme="soft-ui"] .subs{border:0;box-shadow:inset 3px 3px 7px rgba(111,130,141,.12),inset -3px -3px 7px rgba(255,255,255,.72)}
+body[data-theme="soft-ui"] .runtime-status-icon{filter:drop-shadow(1px 1px 1px rgba(255,255,255,.7))}
+
+/* UI-Prompt visual: Monochrome. */
+body[data-theme="monochrome"]{
+  --ink:#0f0f0f;--ink2:#171717;--chalk:#f5f5f2;--mist:#b5b5b0;--dim:#777772;
+  --line:rgba(245,245,242,.11);--line2:rgba(245,245,242,.25);
+  --amber:#d2d2cc;--violet:#a7a7a1;--mint:#e1e1db;--rose:#fff;--wrap:#bdbdb7;
+  --font:Arial,"Helvetica Neue","PingFang SC",sans-serif;--serif:Georgia,"Songti SC",serif;
+  --theme-card-bg:#171717;--theme-card-border:#8c8c87;--theme-panel-bg:#202020;
+  --theme-control-bg:#191919;--theme-pop-bg:#1d1d1d;--theme-rail-bg:#121212;--theme-preview-bg:#232323;
+  --theme-card-shadow:0 22px 42px rgba(0,0,0,.48);--theme-radius:6px;--theme-block-radius:4px;
+}
+body[data-theme="monochrome"] .card[data-runtime-state="blocked"] .title::after{color:#fff}
+body[data-theme="monochrome"] .runtime-hero,body[data-theme="monochrome"] .subs{border-color:#696963}
+body[data-theme="monochrome"] .rung.done .jewel,body[data-theme="monochrome"] .seg.f{background:#e7e7e1;border-color:#e7e7e1;box-shadow:none}
+
+/* UI-Prompt visual: Bento Grids. */
+body[data-theme="bento"]{
+  --ink:#faf6ee;--ink2:#fffaf1;--chalk:#202638;--mist:#626975;--dim:#8d9299;
+  --line:rgba(32,38,56,.10);--line2:rgba(32,38,56,.20);
+  --amber:#e1a735;--violet:#6b6bd1;--mint:#318b73;--rose:#d9565e;--wrap:#e17852;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;--serif:Georgia,"Songti SC",serif;
+  --theme-card-bg:#faf6ee;--theme-card-border:rgba(32,38,56,.16);--theme-panel-bg:#f0ebe0;
+  --theme-control-bg:#fffaf1;--theme-pop-bg:#fffaf1;--theme-rail-bg:#f1ebe0;--theme-preview-bg:#f3ede4;
+  --theme-card-shadow:0 18px 36px rgba(52,46,35,.16);--theme-radius:16px;--theme-block-radius:12px;
+}
+body[data-theme="bento"] .runtime-hero{border-left:4px solid var(--accent);border-radius:12px}
+body[data-theme="bento"] .subs{border:0;box-shadow:0 8px 18px rgba(52,46,35,.08)}
+body[data-theme="bento"] .title{font-weight:720}
+
+/* UI-Prompt core: Brutalism. */
+body[data-theme="brutalism"]{
+  --ink:#f3ead4;--ink2:#fff7e5;--chalk:#171717;--mist:#42413d;--dim:#77736b;
+  --line:rgba(23,23,23,.18);--line2:rgba(23,23,23,.42);
+  --amber:#f2c84b;--violet:#5a61c9;--mint:#23836d;--rose:#db4448;--wrap:#e47c3a;
+  --font:Arial,"Helvetica Neue","PingFang SC",sans-serif;--serif:Arial,"Helvetica Neue","PingFang SC",sans-serif;
+  --theme-card-bg:#f4ecd8;--theme-card-border:#171717;--theme-panel-bg:#fff7e5;
+  --theme-control-bg:#fff7e5;--theme-pop-bg:#fff7e5;--theme-rail-bg:#e8ddc5;--theme-preview-bg:#fff2d8;
+  --theme-card-shadow:7px 7px 0 #171717;--theme-radius:0;--theme-block-radius:0;
+}
+body[data-theme="brutalism"] .card{border-width:3px}
+body[data-theme="brutalism"] .runtime-hero,body[data-theme="brutalism"] .subs{border:2px solid #171717}
+body[data-theme="brutalism"] .title{font-size:23px;font-weight:900;text-transform:uppercase;letter-spacing:-.03em}
+body[data-theme="brutalism"] .chip,body[data-theme="brutalism"] .live{border:2px solid #171717;border-radius:0}
+
+/* UI-Prompt visual: Neo Brutalism. */
+body[data-theme="neo-brutalism"]{
+  --ink:#e5dcff;--ink2:#f0e9ff;--chalk:#17151f;--mist:#484251;--dim:#7a7185;
+  --line:rgba(23,21,31,.15);--line2:rgba(23,21,31,.36);
+  --amber:#f4cf55;--violet:#6659d3;--mint:#27836e;--rose:#ec4d88;--wrap:#ef784d;
+  --font:Arial,"Helvetica Neue","PingFang SC",sans-serif;--serif:Arial,"Helvetica Neue","PingFang SC",sans-serif;
+  --theme-card-bg:#e4dbff;--theme-card-border:#17151f;--theme-panel-bg:#f3edff;
+  --theme-control-bg:#f3edff;--theme-pop-bg:#f3edff;--theme-rail-bg:#d6ccf4;--theme-preview-bg:#f0e7ff;
+  --theme-card-shadow:6px 6px 0 #17151f;--theme-radius:8px;--theme-block-radius:4px;
+}
+body[data-theme="neo-brutalism"] .card{border-width:2px}
+body[data-theme="neo-brutalism"] .runtime-hero{border:2px solid #17151f;border-radius:4px}
+body[data-theme="neo-brutalism"] .subs{border:2px solid #17151f;box-shadow:3px 3px 0 #17151f}
+body[data-theme="neo-brutalism"] .title{font-weight:900;letter-spacing:-.03em}
+
+/* UI-Prompt core: Memphis. */
+body[data-theme="memphis"]{
+  --ink:#fff0dc;--ink2:#fff8ed;--chalk:#322a3b;--mist:#665b6a;--dim:#968798;
+  --line:rgba(50,42,59,.12);--line2:rgba(50,42,59,.24);
+  --amber:#e5b83f;--violet:#7562c7;--mint:#35a99d;--rose:#e85d91;--wrap:#e8844e;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;--serif:Georgia,"Songti SC",serif;
+  --theme-card-bg:repeating-linear-gradient(135deg,rgba(232,93,145,.07) 0 2px,transparent 2px 18px),#fff0dc;
+  --theme-card-border:#322a3b;--theme-panel-bg:#fff8ed;--theme-control-bg:#fff8ed;
+  --theme-pop-bg:#fff8ed;--theme-rail-bg:#f5dfcc;--theme-preview-bg:#fff5e8;
+  --theme-card-shadow:8px 8px 0 #35a99d;--theme-radius:14px;--theme-block-radius:12px;
+}
+body[data-theme="memphis"] .card::before{background:repeating-linear-gradient(45deg,transparent 0 10px,rgba(117,98,199,.08) 10px 12px)}
+body[data-theme="memphis"] .runtime-hero{border:2px solid var(--accent);border-radius:12px}
+body[data-theme="memphis"] .title{font-weight:800}
+
+/* UI-Prompt visual: Y2K. */
+body[data-theme="y2k"]{
+  --ink:#cfd9e4;--ink2:#e4edf5;--chalk:#17283d;--mist:#51677c;--dim:#8192a3;
+  --line:rgba(23,40,61,.12);--line2:rgba(23,40,61,.25);
+  --amber:#c38d2e;--violet:#7065dc;--mint:#15947a;--rose:#d54677;--wrap:#e07042;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;--serif:Georgia,"Songti SC",serif;
+  --theme-card-bg:#d8e1ea;--theme-card-border:rgba(255,255,255,.85);--theme-panel-bg:rgba(255,255,255,.48);
+  --theme-control-bg:rgba(236,244,249,.72);--theme-pop-bg:#e6eef4;--theme-rail-bg:#c5d2de;--theme-preview-bg:#e1eaf1;
+  --theme-card-shadow:inset 0 1px 0 #fff,0 20px 42px rgba(71,94,117,.24);--theme-radius:20px;--theme-block-radius:13px;
+}
+body[data-theme="y2k"] .card,body[data-theme="y2k"] .capsule{backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+body[data-theme="y2k"] .card::before{background:linear-gradient(120deg,rgba(255,255,255,.64),transparent 42%)}
+body[data-theme="y2k"] .title{font-weight:760;letter-spacing:-.02em}
+
+/* UI-Prompt retro: Synthwave. */
+body[data-theme="synthwave"]{
+  --ink:#120b28;--ink2:#1b1040;--chalk:#fff1ff;--mist:#c9a8d5;--dim:#876e9a;
+  --line:rgba(255,87,201,.16);--line2:rgba(255,87,201,.32);
+  --amber:#ffc961;--violet:#b786ff;--mint:#60e2c2;--rose:#ff5eab;--wrap:#ff9b61;
+  --font:Arial,"PingFang SC",sans-serif;--serif:Georgia,"Songti SC",serif;
+  --theme-card-bg:repeating-linear-gradient(0deg,rgba(58,225,255,.055) 0 1px,transparent 1px 18px),#180e35;
+  --theme-card-border:#73509b;--theme-panel-bg:rgba(255,79,179,.10);--theme-control-bg:#1b1040;
+  --theme-pop-bg:#1b1040;--theme-rail-bg:#120b28;--theme-preview-bg:#201044;
+  --theme-card-shadow:0 0 0 1px rgba(255,79,179,.22),0 18px 48px rgba(0,0,0,.58),0 0 28px rgba(55,211,255,.12);
+  --theme-radius:6px;--theme-block-radius:5px;
+}
+body[data-theme="synthwave"] .card::before{background:linear-gradient(180deg,rgba(255,75,181,.15),transparent 50%)}
+body[data-theme="synthwave"] .title{text-shadow:0 0 16px rgba(255,78,185,.24)}
+
+/* UI-Prompt retro: Arcade CRT scanlines. */
+body[data-theme="arcade-crt"]{
+  --ink:#06100c;--ink2:#0b1711;--chalk:#ceffda;--mist:#91c6a0;--dim:#548064;
+  --line:rgba(180,255,202,.13);--line2:rgba(180,255,202,.27);
+  --amber:#f0d46b;--violet:#9bb6ff;--mint:#69f19c;--rose:#ff6b72;--wrap:#72d9ff;
+  --font:var(--mono);--serif:var(--mono);
+  --theme-card-bg:#08160e;--theme-card-border:#4b9b68;--theme-panel-bg:rgba(91,232,132,.07);
+  --theme-control-bg:#0b1b12;--theme-pop-bg:#0a1b11;--theme-rail-bg:#06100b;--theme-preview-bg:#0c2114;
+  --theme-card-shadow:0 0 0 1px rgba(92,239,133,.13),0 16px 40px rgba(0,0,0,.54),inset 0 0 20px rgba(78,239,131,.06);
+  --theme-radius:2px;--theme-block-radius:2px;
+}
+body[data-theme="arcade-crt"] .card::after{background:repeating-linear-gradient(0deg,transparent 0 3px,rgba(155,255,175,.035) 3px 4px)}
+body[data-theme="arcade-crt"] .title{font-size:18px;text-transform:uppercase;text-shadow:0 0 8px rgba(103,255,153,.35)}
+body[data-theme="arcade-crt"] .runtime-hero,body[data-theme="arcade-crt"] .subs{border-radius:2px}
+
+/* UI-Prompt retro: Art Deco. */
+body[data-theme="art-deco"]{
+  --ink:#0f0e11;--ink2:#18151a;--chalk:#f3e7c9;--mist:#b8a989;--dim:#84785f;
+  --line:rgba(243,231,201,.13);--line2:rgba(243,231,201,.28);
+  --amber:#d7aa58;--violet:#a28fc2;--mint:#7fb69c;--rose:#d56f78;--wrap:#c8894f;
+  --font:Arial,"PingFang SC",sans-serif;--serif:Georgia,"Songti SC",serif;
+  --theme-card-bg:#151217;--theme-card-border:#b98a43;--theme-panel-bg:rgba(211,168,84,.08);
+  --theme-control-bg:#1b161d;--theme-pop-bg:#18131a;--theme-rail-bg:#100e12;--theme-preview-bg:#1b151d;
+  --theme-card-shadow:0 18px 44px rgba(0,0,0,.54),inset 0 0 0 1px rgba(214,171,87,.16);
+  --theme-radius:1px;--theme-block-radius:1px;
+}
+body[data-theme="art-deco"] .title{letter-spacing:.045em;text-transform:uppercase}
+body[data-theme="art-deco"] .runtime-hero,body[data-theme="art-deco"] .subs{border-color:color-mix(in srgb,var(--amber) 56%,var(--line2));border-radius:1px}
+body[data-theme="art-deco"] .card-topbar .iconbtn,body[data-theme="art-deco"] .proj-chip{border-color:color-mix(in srgb,var(--amber) 48%,var(--line2));border-radius:1px}
+
+/* UI-Prompt retro: Bauhaus. */
+body[data-theme="bauhaus"]{
+  --ink:#f3eddd;--ink2:#fff9ec;--chalk:#1e1d1a;--mist:#55524a;--dim:#888276;
+  --line:rgba(30,29,26,.14);--line2:rgba(30,29,26,.30);
+  --amber:#e1b235;--violet:#315ca7;--mint:#19846e;--rose:#c93e38;--wrap:#e47c31;
+  --font:Arial,"Helvetica Neue","PingFang SC",sans-serif;--serif:Georgia,"Songti SC",serif;
+  --theme-card-bg:#f3eddd;--theme-card-border:#1e1d1a;--theme-panel-bg:#fff9ec;
+  --theme-control-bg:#fff9ec;--theme-pop-bg:#fff9ec;--theme-rail-bg:#e5dbc5;--theme-preview-bg:#f9f1df;
+  --theme-card-shadow:5px 5px 0 #c93e38;--theme-radius:0;--theme-block-radius:0;
+}
+body[data-theme="bauhaus"] .card{border-width:2px}
+body[data-theme="bauhaus"] .runtime-hero{border-left:7px solid var(--accent);border-radius:0}
+body[data-theme="bauhaus"] .title{font-family:Arial,"Helvetica Neue","PingFang SC",sans-serif;font-weight:900;letter-spacing:-.03em}
+
+/* UI-Prompt visual: Wabi-Sabi. */
+body[data-theme="wabi-sabi"]{
+  --ink:#e8e1d4;--ink2:#f1eadc;--chalk:#302e29;--mist:#68645a;--dim:#928c7e;
+  --line:rgba(48,46,41,.12);--line2:rgba(48,46,41,.23);
+  --amber:#b6874c;--violet:#6d747d;--mint:#6b8061;--rose:#a85f57;--wrap:#9d7354;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;--serif:Georgia,"Songti SC","STSong",serif;
+  --theme-card-bg:#ebe4d7;--theme-card-border:#898273;--theme-panel-bg:rgba(255,255,255,.28);
+  --theme-control-bg:rgba(242,235,222,.74);--theme-pop-bg:#eee7da;--theme-rail-bg:#e0d8ca;--theme-preview-bg:#eee6d8;
+  --theme-card-shadow:0 18px 35px rgba(74,66,54,.18);--theme-radius:3px;--theme-block-radius:2px;
+}
+body[data-theme="wabi-sabi"] .card::before{background:repeating-linear-gradient(167deg,transparent 0 22px,rgba(74,66,54,.035) 22px 23px)}
+body[data-theme="wabi-sabi"] .excerpt{font-style:italic;color:#3b3932}
+body[data-theme="wabi-sabi"] .runtime-hero{border-left:2px solid var(--accent);border-radius:0 3px 3px 0}
+
+/* Shared geometry accents for expressive families. */
+body[data-theme="minimalism"] .theme-choice,
+body[data-theme="swiss"] .theme-choice,
+body[data-theme="bauhaus"] .theme-choice,
+body[data-theme="brutalism"] .theme-choice,
+body[data-theme="neo-brutalism"] .theme-choice{border-radius:0}
+body[data-theme="industrial"] .theme-choice,
+body[data-theme="sci-fi-hud"] .theme-choice,
+body[data-theme="arcade-crt"] .theme-choice{font-family:var(--mono)}

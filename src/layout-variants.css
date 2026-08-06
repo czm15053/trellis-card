@@ -1,0 +1,406 @@
+/* Trellis layout lab.
+   Every prototype keeps the original material, DOM, state language, and
+   interaction model. Only the spatial hierarchy changes. */
+
+/* ---------- editorial / specimen card ----------
+   More breathing room around the title and PRD, with supporting telemetry
+   compressed into quiet rails. This is the closest refinement to original. */
+body[data-layout="editorial"] .grid{grid-template-columns:40px 1fr}
+body[data-layout="editorial"] .post{padding:18px 0 14px}
+body[data-layout="editorial"] .main{padding:12px 18px 0 16px}
+body[data-layout="editorial"] .title{font-size:22px;line-height:1.16;margin-top:8px}
+body[data-layout="editorial"] .observe-timeline{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;
+  max-height:none;margin-top:9px
+}
+body[data-layout="editorial"] .observe-timeline li{
+  min-width:0;display:block;padding:4px 5px;border-top:1px solid var(--line2);
+  font-size:8px;line-height:1.3
+}
+body[data-layout="editorial"] .observe-timeline li i,
+body[data-layout="editorial"] .observe-timeline li + li::before{display:none}
+body[data-layout="editorial"] .observe-timeline .tl-label,
+body[data-layout="editorial"] .observe-timeline .tl-time{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body[data-layout="editorial"] .observe-timeline .tl-label{font-size:7.5px;margin-bottom:2px}
+body[data-layout="editorial"] .runtime-hero{margin-top:10px;padding:8px 10px 8px 8px;border-radius:6px}
+body[data-layout="editorial"] .runtime-state-line strong{font-size:13px}
+body[data-layout="editorial"] .runtime-activity{font-size:9px}
+body[data-layout="editorial"] .runtime-row{margin-top:8px;padding-bottom:8px}
+body[data-layout="editorial"] .meta{margin-top:7px}
+body[data-layout="editorial"] .arts-mini{margin-top:6px;padding-bottom:8px;font-size:8px}
+body[data-layout="editorial"] .stage{gap:8px;padding:6px 0}
+body[data-layout="editorial"] .stage-fill{justify-content:center;padding-top:0}
+body[data-layout="editorial"] .excerpt{font-size:15px;line-height:1.5;max-height:10.5em}
+body[data-layout="editorial"] .subs{padding:11px 12px;border-radius:11px}
+body[data-layout="editorial"] .foot{padding-top:8px}
+body[data-layout="editorial"] .face.back{padding:12px 18px 0 16px}
+body[data-layout="editorial"] .b-pane{gap:9px}
+body[data-layout="editorial"] .doc{font-size:12px;line-height:1.7}
+
+/* ---------- signal / observation desk ----------
+   The live signal gets a fixed, early reading slot. Metadata follows it in
+   deterministic rows, so the card scans top-to-bottom like an instrument. */
+body[data-layout="signal"] .pane{
+  display:grid;grid-template-rows:auto auto auto auto auto auto auto minmax(0,1fr) auto;
+  grid-template-areas:"head" "title" "timeline" "hero" "phase" "meta" "arts" "stage" "foot";
+  flex:1;min-height:0;gap:0
+}
+body[data-layout="signal"] .pane>.head{grid-area:head}
+body[data-layout="signal"] .pane>.title{grid-area:title}
+body[data-layout="signal"] .pane>.observe-timeline{grid-area:timeline}
+body[data-layout="signal"] .pane>.runtime-hero{grid-area:hero}
+body[data-layout="signal"] .pane>.runtime-row{grid-area:phase}
+body[data-layout="signal"] .pane>.meta{grid-area:meta}
+body[data-layout="signal"] .pane>.arts-mini{grid-area:arts}
+body[data-layout="signal"] .pane>.stage{grid-area:stage}
+body[data-layout="signal"] .pane>.foot{grid-area:foot}
+body[data-layout="signal"] .main{padding:11px 16px 0 14px}
+body[data-layout="signal"] .title{font-size:20px;line-height:1.18;margin-top:8px}
+body[data-layout="signal"] .observe-timeline{margin-top:7px;max-height:2.8em;gap:2px}
+body[data-layout="signal"] .observe-timeline li{font-size:8px;gap:6px}
+body[data-layout="signal"] .runtime-hero{margin-top:8px;padding:9px 10px 9px 8px;border-radius:9px}
+body[data-layout="signal"] .runtime-state-line strong{font-size:14px}
+body[data-layout="signal"] .runtime-activity{
+  display:-webkit-box;white-space:normal;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+  font-size:10px;line-height:1.4
+}
+body[data-layout="signal"] .runtime-row{margin-top:7px;padding:7px 0;border-bottom:1px solid var(--line)}
+body[data-layout="signal"] .runtime-phase{font-size:10px}
+body[data-layout="signal"] .runtime-progress{font-size:10px}
+body[data-layout="signal"] .meta{margin-top:6px;min-height:22px}
+body[data-layout="signal"] .arts-mini{margin-top:5px;padding:5px 0 7px;font-size:8px}
+body[data-layout="signal"] .stage{gap:8px;padding:8px 0 5px}
+body[data-layout="signal"] .stage-fill{justify-content:center;padding-top:0}
+body[data-layout="signal"] .excerpt{font-size:14.5px;line-height:1.52;max-height:9.2em}
+body[data-layout="signal"] .subs{padding:10px 12px;border-radius:10px}
+body[data-layout="signal"] .face.back{padding:11px 16px 0 14px}
+body[data-layout="signal"] .runtime-evidence{padding:9px 10px}
+
+/* ---------- timeline / task history ----------
+   The left spine becomes the primary organizing axis. The content column is
+   narrower and quieter, while each major block reads as a station on the
+   same vertical journey. */
+body[data-layout="timeline"] .grid{grid-template-columns:58px 1fr}
+body[data-layout="timeline"] .post{padding:18px 0 14px}
+body[data-layout="timeline"] .post::before{top:24px;bottom:24px}
+body[data-layout="timeline"] .main{padding:12px 15px 0 13px}
+body[data-layout="timeline"] .head{padding-bottom:5px;border-bottom:1px solid var(--line)}
+body[data-layout="timeline"] .title{font-size:20px;line-height:1.2;margin-top:9px}
+body[data-layout="timeline"] .observe-timeline{margin-top:8px;max-height:3.4em;padding-left:2px}
+body[data-layout="timeline"] .runtime-hero{
+  margin-top:10px;padding:8px 10px 8px 8px;border:0;border-left:2px solid var(--accent);
+  border-radius:0 8px 8px 0;background:color-mix(in srgb,var(--accent) 5%,transparent)
+}
+body[data-layout="timeline"] .runtime-row{margin-top:8px;padding:7px 0 8px}
+body[data-layout="timeline"] .meta{margin-top:7px;padding-left:2px}
+body[data-layout="timeline"] .arts-mini{margin-top:5px;padding:6px 2px 8px}
+body[data-layout="timeline"] .stage{gap:8px;padding:7px 0}
+body[data-layout="timeline"] .stage-fill{padding-left:11px;border-left:1px solid var(--line2)}
+body[data-layout="timeline"] .excerpt{font-size:14px;line-height:1.55;max-height:9.2em}
+body[data-layout="timeline"] .subs{border-left:2px solid color-mix(in srgb,var(--accent) 45%,transparent);border-radius:0 10px 10px 0;padding:10px 11px}
+body[data-layout="timeline"] .foot{padding-top:8px}
+body[data-layout="timeline"] .face.back{padding:12px 15px 0 13px}
+body[data-layout="timeline"] .runtime-evidence{border-left:2px solid var(--accent);border-radius:0 9px 9px 0}
+
+/* ---------- focus / reading card ----------
+   Reduce instrumentation noise and spend the recovered space on legible
+   title and PRD copy. Nothing is removed from the data contract; secondary
+   rails become visually quieter rather than disappearing. */
+body[data-layout="focus"] .grid{grid-template-columns:34px 1fr}
+body[data-layout="focus"] .post{padding:18px 0 14px}
+body[data-layout="focus"] .rung .lab{font-size:7px;letter-spacing:0}
+body[data-layout="focus"] .main{padding:12px 18px 0 15px}
+body[data-layout="focus"] .head{padding-bottom:4px}
+body[data-layout="focus"] .repo{font-size:9px;letter-spacing:.11em}
+body[data-layout="focus"] .title{font-size:23px;line-height:1.17;margin-top:8px}
+body[data-layout="focus"] .observe-timeline{display:flex;flex-direction:row;gap:10px;margin-top:7px;max-height:1.4em}
+body[data-layout="focus"] .observe-timeline li{font-size:7.5px;gap:4px;min-width:0}
+body[data-layout="focus"] .observe-timeline li i{width:3px;height:3px}
+body[data-layout="focus"] .observe-timeline li + li::before{display:none}
+body[data-layout="focus"] .observe-timeline .tl-label{display:none}
+body[data-layout="focus"] .observe-timeline .tl-time{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body[data-layout="focus"] .runtime-hero{margin-top:9px;padding:8px 10px 8px 8px;border-radius:6px}
+body[data-layout="focus"] .runtime-state-line strong{font-size:14px}
+body[data-layout="focus"] .runtime-activity{font-size:9.5px}
+body[data-layout="focus"] .runtime-row{margin-top:7px;padding:7px 0}
+body[data-layout="focus"] .runtime-phase{font-size:9px}
+body[data-layout="focus"] .runtime-progress{font-size:9px}
+body[data-layout="focus"] .meta{margin-top:5px;gap:4px;min-height:20px}
+body[data-layout="focus"] .chip{font-size:8px;padding:2px 7px}
+body[data-layout="focus"] .live{font-size:8px;padding:2px 7px}
+body[data-layout="focus"] .arts-mini{margin-top:4px;padding:4px 0 6px;font-size:7.5px;opacity:.78}
+body[data-layout="focus"] .stage{padding:5px 0;gap:7px}
+body[data-layout="focus"] .stage-fill{justify-content:center;padding:0 0 0 12px;border-left:2px solid color-mix(in srgb,var(--accent) 65%,transparent)}
+body[data-layout="focus"] .quote-label{margin-bottom:6px}
+body[data-layout="focus"] .excerpt{font-size:16px;line-height:1.5;max-height:11em;color:#e4e0d5}
+body[data-layout="focus"] .subs{padding:9px 11px;border-radius:9px}
+body[data-layout="focus"] .subline .cur{font-size:12px}
+body[data-layout="focus"] .foot{padding-top:7px}
+body[data-layout="focus"] .face.back{padding:12px 18px 0 15px}
+body[data-layout="focus"] .doc{font-size:12px;line-height:1.72}
+
+/* Capsule layouts remain the same compact information contract, with only
+   the emphasis and breathing room adjusted to match each front card. */
+body[data-layout="editorial"] .capsule{border-radius:14px}
+body[data-layout="editorial"] .cap-body{padding:9px 14px 10px;gap:4px}
+body[data-layout="editorial"] .cap-title{font-size:14px}
+body[data-layout="editorial"] .cap-activity{font-size:10px}
+body[data-layout="signal"] .capsule{border-radius:10px}
+body[data-layout="signal"] .cap-body{padding:8px 13px 9px;gap:4px}
+body[data-layout="signal"] .cap-state{font-size:12px}
+body[data-layout="signal"] .cap-title{font-size:13.5px}
+body[data-layout="signal"] .cap-activity{font-size:10.5px}
+body[data-layout="timeline"] .capsule{border-radius:10px}
+body[data-layout="timeline"] .cap-body{padding:8px 13px 9px;gap:5px;border-left:2px solid var(--accent)}
+body[data-layout="timeline"] .cap-title{font-size:13px}
+body[data-layout="focus"] .capsule{border-radius:12px}
+body[data-layout="focus"] .cap-body{padding:8px 14px 9px;gap:4px}
+body[data-layout="focus"] .cap-title{font-size:14px}
+body[data-layout="focus"] .cap-activity{font-size:10.5px}
+
+/* Keep the prototypes readable at the compact verification height. */
+@media (max-height:560px){
+  body[data-layout="editorial"] .title,
+  body[data-layout="timeline"] .title{font-size:19px}
+  body[data-layout="focus"] .title{font-size:21px}
+  body[data-layout="focus"] .excerpt{font-size:14.5px}
+}
+
+/* ---------- layout pass 2: stronger hierarchy experiments ---------- */
+
+/* Editorial becomes a real document-first cover: title and PRD lead, live
+   telemetry is a lower annotation rather than a competing hero. */
+body[data-layout="editorial"] .pane{
+  display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto auto auto auto auto;
+  grid-template-areas:"head" "title" "timeline" "stage" "hero" "phase" "meta" "arts" "foot";
+  flex:1;min-height:0;gap:0
+}
+body[data-layout="editorial"] .pane>.head{grid-area:head}
+body[data-layout="editorial"] .pane>.title{grid-area:title}
+body[data-layout="editorial"] .pane>.observe-timeline{grid-area:timeline}
+body[data-layout="editorial"] .pane>.stage{grid-area:stage}
+body[data-layout="editorial"] .pane>.runtime-hero{grid-area:hero}
+body[data-layout="editorial"] .pane>.runtime-row{grid-area:phase}
+body[data-layout="editorial"] .pane>.meta{grid-area:meta}
+body[data-layout="editorial"] .pane>.arts-mini{grid-area:arts}
+body[data-layout="editorial"] .pane>.foot{grid-area:foot}
+body[data-layout="editorial"] .stage{min-height:0}
+body[data-layout="editorial"] .stage-fill{justify-content:flex-start;padding-top:15px}
+body[data-layout="editorial"] .runtime-hero{margin-top:4px}
+body[data-layout="editorial"] .runtime-row{margin-top:5px}
+body[data-layout="editorial"] .meta{margin-top:5px}
+body[data-layout="editorial"] .arts-mini{margin-top:4px}
+
+/* Signal-first puts the live decision point directly below the title and
+   removes the duplicate pre-hero timeline from the reading path. */
+body[data-layout="signal"] .pane{
+  grid-template-rows:auto auto auto auto auto minmax(0,1fr) auto auto;
+  grid-template-areas:"head" "title" "hero" "phase" "meta" "stage" "arts" "foot";
+}
+body[data-layout="signal"] .pane>.observe-timeline{display:none}
+body[data-layout="signal"] .runtime-hero{margin-top:9px;padding:10px 11px 10px 8px;border-radius:5px}
+body[data-layout="signal"] .runtime-state-line strong{font-size:15px}
+body[data-layout="signal"] .runtime-activity{font-size:10px}
+body[data-layout="signal"] .stage{padding:10px 0 5px}
+body[data-layout="signal"] .stage-fill{padding-top:14px}
+
+/* Timeline-first increases the rail and aligns each content block to it. */
+body[data-layout="timeline"] .grid{grid-template-columns:64px 1fr}
+body[data-layout="timeline"] .rung .lab{font-size:8px}
+body[data-layout="timeline"] .main{padding-left:12px;padding-right:14px}
+body[data-layout="timeline"] .observe-timeline{padding-left:6px}
+body[data-layout="timeline"] .runtime-hero{margin-top:8px}
+body[data-layout="timeline"] .stage{padding-left:5px}
+body[data-layout="timeline"] .foot{margin-left:-5px}
+
+/* Focus-first is deliberately quieter: the reader sees title, state, and
+   PRD before the secondary artifact counters. */
+body[data-layout="focus"] .pane{
+  display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr) auto auto;
+  grid-template-areas:"head" "title" "hero" "phase" "stage" "meta" "foot";
+  flex:1;min-height:0;gap:0
+}
+body[data-layout="focus"] .pane>.head{grid-area:head}
+body[data-layout="focus"] .pane>.title{grid-area:title}
+body[data-layout="focus"] .pane>.observe-timeline{display:none}
+body[data-layout="focus"] .pane>.runtime-hero{grid-area:hero}
+body[data-layout="focus"] .pane>.runtime-row{grid-area:phase}
+body[data-layout="focus"] .pane>.stage{grid-area:stage}
+body[data-layout="focus"] .pane>.meta{grid-area:meta}
+body[data-layout="focus"] .pane>.arts-mini{display:none}
+body[data-layout="focus"] .pane>.foot{grid-area:foot}
+body[data-layout="focus"] .stage{min-height:0;padding:10px 0 6px}
+body[data-layout="focus"] .stage-fill{justify-content:flex-start;padding-top:18px}
+body[data-layout="focus"] .runtime-hero{margin-top:9px}
+body[data-layout="focus"] .runtime-row{margin-top:6px}
+body[data-layout="focus"] .meta{margin-top:5px;padding-bottom:2px}
+
+/* ---------- front-refined / specimen reading card ----------
+   A front-only convergence pass. The original rail and specimen language
+   stay intact, while duplicate telemetry is removed from the reading path.
+   Details and capsule keep their own information contract. */
+body[data-layout="front-refined"] .face.front .grid{grid-template-columns:46px 1fr}
+body[data-layout="front-refined"] .face.front .main{padding:12px 15px 0 14px}
+body[data-layout="front-refined"] .face.front .pane{
+  display:grid;
+  grid-template-rows:auto auto auto auto minmax(0,1fr) auto auto;
+  grid-template-areas:"head" "title" "hero" "phase" "stage" "meta" "foot";
+  flex:1;min-height:0;gap:0
+}
+body[data-layout="front-refined"] .face.front .pane>.head{grid-area:head}
+body[data-layout="front-refined"] .face.front .pane>.title{grid-area:title}
+body[data-layout="front-refined"] .face.front .pane>.runtime-hero{grid-area:hero}
+body[data-layout="front-refined"] .face.front .pane>.runtime-row{grid-area:phase}
+body[data-layout="front-refined"] .face.front .pane>.stage{grid-area:stage}
+body[data-layout="front-refined"] .face.front .pane>.meta{grid-area:meta}
+body[data-layout="front-refined"] .face.front .pane>.foot{grid-area:foot}
+body[data-layout="front-refined"] .face.front .pane>.observe-timeline,
+body[data-layout="front-refined"] .face.front .pane>.arts-mini{display:none}
+
+/* The top controls remain discoverable, but no longer compete with the title. */
+body[data-layout="front-refined"] .card:not(.flipped) .card-topbar{top:0;left:8px;right:8px}
+body[data-layout="front-refined"] .card:not(.flipped) .card-topbar .proj-chip,
+body[data-layout="front-refined"] .card:not(.flipped) .card-topbar .iconbtn{
+  background:rgba(15,17,25,.54);border-color:rgba(236,234,226,.09);color:var(--dim)
+}
+body[data-layout="front-refined"] .card:not(.flipped) .card-topbar .proj-chip:hover,
+body[data-layout="front-refined"] .card:not(.flipped) .card-topbar .iconbtn:hover,
+body[data-layout="front-refined"] .card:not(.flipped) .card-topbar .iconbtn.on{
+  color:var(--chalk);border-color:color-mix(in srgb,var(--accent) 38%,var(--line2))
+}
+
+/* Title and live state are one uninterrupted upper reading group. */
+body[data-layout="front-refined"] .face.front .title{
+  font-size:22.5px;line-height:1.18;margin-top:8px
+}
+body[data-layout="front-refined"] .face.front .rung{cursor:help}
+body[data-layout="front-refined"] .face.front .rung:not(.now) .lab{opacity:.7}
+body[data-layout="front-refined"] .face.front .rung.now .lab{font-size:8.5px}
+body[data-layout="front-refined"] .face.front .rung:hover .lab{color:var(--chalk);opacity:1}
+body[data-layout="front-refined"] .face.front .rung:hover::after{
+  content:attr(data-tip);position:absolute;left:calc(100% - 3px);top:50%;z-index:12;
+  width:142px;padding:6px 8px;transform:translateY(-50%);
+  border:1px solid var(--line2);border-radius:7px;background:rgba(16,18,26,.96);
+  box-shadow:0 8px 20px rgba(0,0,0,.42);color:var(--mist);
+  font-family:var(--font);font-size:9px;font-weight:500;line-height:1.35;
+  letter-spacing:0;white-space:normal;text-align:left;pointer-events:none
+}
+body[data-layout="front-refined"] .face.front .runtime-hero{
+  margin-top:9px;padding:9px 11px 9px 8px;border-radius:6px;
+  background:color-mix(in srgb,var(--accent) 5%,transparent)
+}
+body[data-layout="front-refined"] .face.front .runtime-state-line strong{font-size:15px}
+body[data-layout="front-refined"] .face.front .runtime-status-icon .lucide{width:16px;height:16px}
+body[data-layout="front-refined"] .face.front .runtime-activity{
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
+  white-space:normal;text-overflow:clip;font-size:10.5px;line-height:1.45
+}
+body[data-layout="front-refined"] .face.front .runtime-row{
+  margin-top:6px;padding:8px 0 9px;border-bottom:1px solid var(--line)
+}
+body[data-layout="front-refined"] .face.front .runtime-phase,
+body[data-layout="front-refined"] .face.front .runtime-progress{font-size:10px}
+body[data-layout="front-refined"] .face.front .runtime-progress{color:var(--chalk)}
+
+/* Small warning flag next to the title. The hero remains the full textual
+   source of truth; this is only a fast visual alarm for exceptional states. */
+body[data-layout="front-refined"] .card[data-runtime-state="blocked"] .face.front .title,
+body[data-layout="front-refined"] .card[data-runtime-state="failed"] .face.front .title,
+body[data-layout="front-refined"] .card[data-runtime-state="waiting_permission"] .face.front .title,
+body[data-layout="front-refined"] .card[data-runtime-state="waiting_question"] .face.front .title{position:relative;padding-right:24px}
+body[data-layout="front-refined"] .card[data-runtime-state="blocked"] .face.front .title::after,
+body[data-layout="front-refined"] .card[data-runtime-state="failed"] .face.front .title::after,
+body[data-layout="front-refined"] .card[data-runtime-state="waiting_permission"] .face.front .title::after,
+body[data-layout="front-refined"] .card[data-runtime-state="waiting_question"] .face.front .title::after{
+  position:absolute;right:1px;top:3px;width:17px;height:17px;
+  display:inline-flex;align-items:center;justify-content:center;
+  border:1px solid currentColor;border-radius:50%;
+  font-family:var(--mono);font-size:11px;font-weight:800;line-height:1
+}
+body[data-layout="front-refined"] .card[data-runtime-state="blocked"] .face.front .title::after{content:"!";color:var(--rose);background:color-mix(in srgb,var(--rose) 10%,transparent)}
+body[data-layout="front-refined"] .card[data-runtime-state="failed"] .face.front .title::after{content:"×";color:var(--rose);background:color-mix(in srgb,var(--rose) 10%,transparent)}
+body[data-layout="front-refined"] .card[data-runtime-state="waiting_permission"] .face.front .title::after,
+body[data-layout="front-refined"] .card[data-runtime-state="waiting_question"] .face.front .title::after{content:"?";color:#e7c56a;background:color-mix(in srgb,#e7c56a 10%,transparent)}
+
+/* Stage is the only elastic region. Summary stays legible; checklist stays
+   anchored below it instead of becoming another competing hero panel. */
+body[data-layout="front-refined"] .face.front .stage{
+  min-height:0;padding:9px 0 6px;gap:8px
+}
+body[data-layout="front-refined"] .face.front .stage-fill{min-height:0;padding-top:0}
+body[data-layout="front-refined"] .face.front .stage:not(:has(.subs)) .stage-fill{
+  justify-content:flex-start;padding-top:14px
+}
+body[data-layout="front-refined"] .face.front .stage:has(.subs) .stage-fill{
+  justify-content:center;padding-top:0
+}
+body[data-layout="front-refined"] .face.front .quote-label{margin-bottom:7px}
+body[data-layout="front-refined"] .face.front .excerpt{
+  position:relative;cursor:help;
+  padding:3px 10px 3px 15px;border-left-width:3px;
+  font-size:15.5px;line-height:1.56;font-weight:500;
+  max-height:calc(5 * 1.56em)
+}
+body[data-layout="front-refined"] .face.front .excerpt::after{
+  content:"↗";position:absolute;right:7px;bottom:4px;padding-left:4px;
+  color:color-mix(in srgb,var(--accent) 62%,var(--mist));font-family:var(--mono);
+  font-size:10px;font-style:normal;line-height:1;background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--ink2) 88%,transparent) 35%)
+}
+body[data-layout="front-refined"] .face.front .excerpt:hover{max-height:22em}
+body[data-layout="front-refined"] .face.front .desc{
+  font-size:13px;line-height:1.62;-webkit-line-clamp:7
+}
+body[data-layout="front-refined"] .face.front .subs{
+  margin-top:auto;padding:11px 12px 11px;border-radius:10px
+}
+body[data-layout="front-refined"] .face.front .segs{height:4px;opacity:.72}
+body[data-layout="front-refined"] .face.front .seg.f{box-shadow:none;opacity:.72}
+body[data-layout="front-refined"] .face.front .seg.c{box-shadow:0 0 6px color-mix(in srgb,var(--accent) 42%,transparent);opacity:.92}
+body[data-layout="front-refined"] .face.front .sub-caption{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  margin-top:8px;font-family:var(--mono);font-size:8px;font-weight:700;
+  letter-spacing:.08em;color:var(--dim);text-transform:uppercase
+}
+body[data-layout="front-refined"] .face.front .sub-caption .hint{color:var(--dim);font-weight:500;letter-spacing:0}
+body[data-layout="front-refined"] .face.front .subline{margin-top:7px}
+body[data-layout="front-refined"] .face.front .subline .cur{font-size:13.5px}
+body[data-layout="front-refined"] .face.front .subline .n{font-size:10.5px}
+body[data-layout="front-refined"] .face.front .subs:hover .sublist{grid-template-rows:1fr}
+body[data-layout="front-refined"] .face.front .meta{
+  margin-top:4px;gap:4px;min-height:20px;opacity:.88
+}
+body[data-layout="front-refined"] .face.front .chip{
+  display:inline-flex;align-items:center;min-height:18px;padding:2px 7px;
+  border:1px solid var(--line2);border-radius:999px;background:rgba(255,255,255,.025);
+  font-family:var(--mono);font-size:8.5px;font-weight:700;color:var(--mist)
+}
+body[data-layout="front-refined"] .face.front .chip.priority-p0{
+  color:#ffc39d;border-color:color-mix(in srgb,var(--wrap) 58%,var(--line2));
+  background:color-mix(in srgb,var(--wrap) 13%,transparent)
+}
+body[data-layout="front-refined"] .face.front .chip.priority-p1{color:#e7c56a;border-color:color-mix(in srgb,#e7c56a 42%,var(--line2))}
+body[data-layout="front-refined"] .face.front .chip.priority-p2{color:var(--mist)}
+body[data-layout="front-refined"] .face.front .branch-meta{color:var(--mist);font-weight:500}
+body[data-layout="front-refined"] .face.front .live{
+  font-size:8.5px;padding:2px 8px;color:var(--dim);border-color:var(--line2);background:transparent;font-weight:500
+}
+body[data-layout="front-refined"] .face.front .live i{background:var(--mint)}
+
+/* The shared topbar overlays both faces; the detail face reserves its own
+   header band so the document title never sits underneath controls. */
+body[data-layout] .card.flipped .face.back{padding-top:36px}
+body[data-layout="front-refined"] .face.front .foot{padding-top:8px}
+
+@media (max-height:560px){
+  body[data-layout="front-refined"] .face.front .title{font-size:20px}
+  body[data-layout="front-refined"] .face.front .excerpt{font-size:14px;line-height:1.52;max-height:calc(5 * 1.52em)}
+  body[data-layout="front-refined"] .face.front .runtime-hero{padding-top:7px;padding-bottom:7px}
+}
+
+@media (max-width:360px){
+  body[data-layout="front-refined"] .face.front .grid{grid-template-columns:42px 1fr}
+  body[data-layout="front-refined"] .face.front .main{padding-right:12px;padding-left:12px}
+  body[data-layout="front-refined"] .face.front .title{font-size:20px}
+  body[data-layout="front-refined"] .face.front .excerpt{font-size:14.5px}
+  body[data-layout="front-refined"] .face.front .subline .cur{font-size:12.5px}
+}
