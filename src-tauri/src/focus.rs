@@ -284,6 +284,7 @@ mod tests {
             lane: 0,
             partial: 0.0,
             kind: "task".into(),
+            archived: false,
             sessions: Vec::new(),
             excerpt: String::new(),
             artifacts: Artifacts::default(),

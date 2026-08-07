@@ -66,6 +66,8 @@ pub struct Task {
     pub lane: u8,
     pub partial: f64,
     pub kind: String,
+    // true = 该任务位于 .trellis/tasks/archive/ 下（已归档，仅查看）
+    pub archived: bool,
     // 指向该任务的 AI 会话（platform + 最近活跃时间）
     pub sessions: Vec<SessionInfo>,
     // prd.md 首段摘要（“在规划/做什么”的实质内容）
@@ -404,7 +406,14 @@ fn mtime_ms(p: &Path) -> i64 {
         .unwrap_or(0)
 }
 
+struct TaskLocation<'a> {
+    rel_dir: &'a str,
+    archived: bool,
+}
+
 // 归一化 + 计算字段（progress/stage/lane/kind/sessions/excerpt/artifacts/phase）
+// rel_dir：任务目录相对 .trellis/tasks/ 的路径（归档任务形如 archive/2026-08/<id>，活跃任务为 <id>）
+// archived：任务是否位于 archive/ 下
 fn build_task(
     dir_name: &str,
     raw: RawTask,
@@ -412,6 +421,7 @@ fn build_task(
     sessions: Vec<SessionInfo>,
     excerpt: String,
     artifacts: Artifacts,
+    location: TaskLocation<'_>,
 ) -> Task {
     let status = raw.status.clone().unwrap_or_else(|| "planning".into());
     let progress = crate::progress::compute_progress(&status, &raw.subtasks);
@@ -438,16 +448,28 @@ fn build_task(
         lane,
         partial: progress,
         kind: kind.to_string(),
+        archived: location.archived,
         sessions,
         excerpt,
         artifacts,
         phase,
-        dir: dir_name.to_string(),
+        dir: location.rel_dir.to_string(),
     }
 }
 
-// 解析单个项目的全部任务；损坏/缺文件的任务跳过并记入 errors；archive/ 与隐藏目录不扫
+// 解析单个项目的全部活跃任务；损坏/缺文件的任务跳过并记入 errors；隐藏目录不扫。
+// 与 scan_tasks_with_archived 的区别：不扫描 archive/ 目录（保持 task_count / version 语义不变）。
 pub fn scan_tasks(project_dir: &Path) -> (Vec<Task>, Vec<String>) {
+    scan_tasks_inner(project_dir, false)
+}
+
+// 解析单个项目的全部任务，含 archive/ 下的已归档任务（archived=true，仅查看，不可反归档）。
+// 前端勾选「显示已归档」时用此结果。
+pub fn scan_tasks_with_archived(project_dir: &Path) -> (Vec<Task>, Vec<String>) {
+    scan_tasks_inner(project_dir, true)
+}
+
+fn scan_tasks_inner(project_dir: &Path, include_archived: bool) -> (Vec<Task>, Vec<String>) {
     let tasks_dir = project_dir.join(".trellis").join("tasks");
     let mut tasks = Vec::new();
     let mut errors = Vec::new();
@@ -465,7 +487,14 @@ pub fn scan_tasks(project_dir: &Path) -> (Vec<Task>, Vec<String>) {
     for e in entries.flatten() {
         let dir_name = e.file_name().to_string_lossy().into_owned();
         let task_path = e.path();
-        if !task_path.is_dir() || dir_name == "archive" || dir_name.starts_with('.') {
+        /* archive/ 目录：默认跳过；include_archived 时递归扫描其中的任务 */
+        if dir_name == "archive" {
+            if include_archived {
+                scan_archived_dir(&tasks_dir, &task_path, &sessions, &mut tasks, &mut errors);
+            }
+            continue;
+        }
+        if !task_path.is_dir() || dir_name.starts_with('.') {
             continue;
         }
         /* 过滤 Trellis 初始化自带的 Bootstrap Guidelines 引导任务：目录名以
@@ -473,28 +502,15 @@ pub fn scan_tasks(project_dir: &Path) -> (Vec<Task>, Vec<String>) {
         if is_bootstrap_guidelines(&dir_name) {
             continue;
         }
-        let task_json_path = task_path.join("task.json");
-        let raw: RawTask = match fs::read_to_string(&task_json_path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-        {
-            Some(r) => r,
-            None => {
-                errors.push(format!("跳过任务 {}", dir_name));
-                continue;
-            }
-        };
-        let task_sessions = sessions.get(&dir_name).cloned().unwrap_or_default();
-        let excerpt = prd_excerpt(&task_path.join("prd.md"), 400);
-        let artifacts = scan_artifacts(&task_path);
-        tasks.push(build_task(
+        scan_task_dir(
             &dir_name,
-            raw,
-            mtime_ms(&task_json_path),
-            task_sessions,
-            excerpt,
-            artifacts,
-        ));
+            &dir_name,
+            false,
+            &task_path,
+            &sessions,
+            &mut tasks,
+            &mut errors,
+        );
     }
     tasks.sort_by(|a, b| {
         a.created_at
@@ -504,6 +520,88 @@ pub fn scan_tasks(project_dir: &Path) -> (Vec<Task>, Vec<String>) {
             .then_with(|| a.id.cmp(&b.id))
     });
     (tasks, errors)
+}
+
+// 递归扫描 archive/ 下的任务：archive/ 下一层是年月（如 2026-08），再一层才是任务目录。
+fn scan_archived_dir(
+    tasks_dir: &Path,
+    archive_dir: &Path,
+    sessions: &std::collections::HashMap<String, Vec<SessionInfo>>,
+    tasks: &mut Vec<Task>,
+    errors: &mut Vec<String>,
+) {
+    let entries = match fs::read_dir(archive_dir) {
+        Ok(e) => e,
+        Err(err) => {
+            errors.push(format!("无法读取 {}: {}", archive_dir.display(), err));
+            return;
+        }
+    };
+    for e in entries.flatten() {
+        let dir_name = e.file_name().to_string_lossy().into_owned();
+        let path = e.path();
+        if !path.is_dir() || dir_name.starts_with('.') {
+            continue;
+        }
+        /* 年月子目录（archive/2026-08/）：继续深入一层找任务 */
+        if !path.join("task.json").is_file() {
+            scan_archived_dir(tasks_dir, &path, sessions, tasks, errors);
+            continue;
+        }
+        if is_bootstrap_guidelines(&dir_name) {
+            continue;
+        }
+        /* 任务目录：rel_dir 保留相对 tasks/ 的完整路径（含年月段），供 get_task 定位文档 */
+        let full_rel = relative_to(tasks_dir, &path);
+        scan_task_dir(&dir_name, &full_rel, true, &path, sessions, tasks, errors);
+    }
+}
+
+// 计算 path 相对 tasks_dir 的路径（如 archive/2026-08/<id>）
+fn relative_to(base: &Path, path: &Path) -> String {
+    path.strip_prefix(base)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| "archive".into())
+}
+
+// 解析单个任务目录并加入 tasks；rel_dir 相对 .trellis/tasks/，archived 标记归档归属。
+fn scan_task_dir(
+    dir_name: &str,
+    rel_dir: &str,
+    archived: bool,
+    task_path: &Path,
+    sessions: &std::collections::HashMap<String, Vec<SessionInfo>>,
+    tasks: &mut Vec<Task>,
+    errors: &mut Vec<String>,
+) {
+    let task_json_path = task_path.join("task.json");
+    let raw: RawTask = match fs::read_to_string(&task_json_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+    {
+        Some(r) => r,
+        None => {
+            errors.push(format!("跳过任务 {}", dir_name));
+            return;
+        }
+    };
+    // 归档任务只读，不继承同 id 活跃任务的会话状态。
+    let task_sessions = if archived {
+        Vec::new()
+    } else {
+        sessions.get(dir_name).cloned().unwrap_or_default()
+    };
+    let excerpt = prd_excerpt(&task_path.join("prd.md"), 400);
+    let artifacts = scan_artifacts(task_path);
+    tasks.push(build_task(
+        dir_name,
+        raw,
+        mtime_ms(&task_json_path),
+        task_sessions,
+        excerpt,
+        artifacts,
+        TaskLocation { rel_dir, archived },
+    ));
 }
 
 pub fn project_info(project_dir: &Path) -> ProjectInfo {
@@ -578,6 +676,14 @@ mod tests {
         let ta = alpha.join(".trellis/tasks/archive/2026-02/old");
         fs::create_dir_all(&ta).unwrap();
         fs::write(ta.join("task.json"), r#"{"id":"old","status":"completed"}"#).unwrap();
+        let archived_bootstrap =
+            alpha.join(".trellis/tasks/archive/2026-02/00-bootstrap-guidelines");
+        fs::create_dir_all(&archived_bootstrap).unwrap();
+        fs::write(
+            archived_bootstrap.join("task.json"),
+            r#"{"id":"00-bootstrap-guidelines","title":"Bootstrap Guidelines","status":"completed"}"#,
+        )
+        .unwrap();
 
         // 不含 .trellis 的普通目录
         fs::create_dir_all(root.join("work/beta")).unwrap();
@@ -640,6 +746,25 @@ mod tests {
         assert!(t.mtime > 0);
         assert_eq!(t.progress, 0.5);
         assert_eq!(t.kind, "work");
+    }
+
+    #[test]
+    fn scan_with_archived_includes_archive_tasks_marked() {
+        let f = setup("scan-archived");
+        /* archive/2026-02/old 的 task.json: {"id":"old","status":"completed"} */
+        let (tasks, errors) = scan_tasks_with_archived(&f.alpha);
+        assert_eq!(errors.len(), 2, "应只报 fixture 中两个损坏的活跃任务");
+        /* 活跃任务仍在 */
+        assert!(tasks.iter().any(|t| t.id == "01-a" && !t.archived));
+        /* 归档任务已包含，且 marked archived=true */
+        let archived: Vec<_> = tasks.iter().filter(|t| t.archived).collect();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].id, "old");
+        /* 归档任务 dir 保留相对 tasks/ 的完整路径，get_task 才能定位文档 */
+        let old = archived.iter().find(|t| t.id == "old").unwrap();
+        assert_eq!(old.dir, "archive/2026-02/old");
+        /* 归档任务 status 为 completed，不计入 active */
+        assert_eq!(old.status, "completed");
     }
 
     #[test]

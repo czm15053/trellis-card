@@ -543,7 +543,8 @@ fn list_tasks(state: State<AppState>, project: String) -> Result<TasksPayload, S
     if !is_allowed_project(&state, &project) {
         return Err("项目未在扫描目录中".into());
     }
-    let (tasks, errors) = scan::scan_tasks(&expand(&project));
+    // 含 archive/ 下的已归档任务：前端用 t.archived 区分，勾选「显示已归档」时展示
+    let (tasks, errors) = scan::scan_tasks_with_archived(&expand(&project));
     Ok(TasksPayload {
         version: scan::tasks_version(&tasks),
         tasks,
@@ -634,7 +635,7 @@ fn get_task(state: State<AppState>, project: String, id: String) -> Result<TaskD
         return Err("项目未在扫描目录中".into());
     }
     let project_dir = expand(&project);
-    let (tasks, _) = scan::scan_tasks(&project_dir);
+    let (tasks, _) = scan::scan_tasks_with_archived(&project_dir);
     let task = tasks
         .into_iter()
         .find(|t| t.id == id || t.dir == id)
@@ -750,14 +751,25 @@ fn fit_window_height(app: AppHandle, height: f64) -> Result<(), String> {
         let max_h = monitor.size().height as f64 / scale - 40.0;
         h = h.min(max_h);
     }
-    window
-        .set_size(tauri::LogicalSize::new(w, h))
-        .map_err(|e| e.to_string())?;
-    /* 无边框透明窗口在 macOS 调整尺寸时可能按中心重新定位；恢复左上角，
-    让内容自适应只改变高度，不把用户正在看的卡片整体推向屏幕上方。 */
-    if let Some(position) = position {
-        window.set_position(position).map_err(|e| e.to_string())?;
+    /* macOS 无边框窗口在 resizable=false 时可能忽略 set_size。 */
+    let _ = window.set_resizable(true);
+    if let Err(error) = window.set_size(tauri::LogicalSize::new(w, h)) {
+        let _ = window.set_resizable(false);
+        return Err(error.to_string());
     }
+    if let Some(position) = position {
+        let _ = window.set_position(position);
+    }
+    /* 原生 resize 异步提交；延迟恢复位置和不可调整状态。 */
+    let delayed_window = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(180));
+        if let Some(position) = position {
+            let _ = delayed_window.set_position(position);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(70));
+        let _ = delayed_window.set_resizable(false);
+    });
     Ok(())
 }
 

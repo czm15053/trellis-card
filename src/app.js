@@ -91,6 +91,7 @@ const state = {
   docSel: null,           // 背面当前选中的文档名
   mode: 'card',           // 'card' | 'capsule'
   theme: isThemeId(document.body.dataset.theme) ? document.body.dataset.theme : 'specimen',
+  showArchived: false,    // 是否显示已归档任务（用于树列表过滤）
 };
 let indexedTasks = [];    // 树列表当前可见扁平顺序（数字键 1-9 用，收起子项不计入）
 let treeCollapsed = new Set();  // 已收起父节点的稳定 key（'项目::任务id'），跨渲染保留
@@ -197,6 +198,7 @@ function loadPrefs() {
     if (typeof p.alwaysOnTop === 'boolean') state.alwaysOnTop = p.alwaysOnTop;
     /* 缺失或损坏时回退到 true，不影响现有用户 */
     if (typeof p.autoFollowImportant === 'boolean') state.autoFollowImportant = p.autoFollowImportant;
+    if (typeof p.showArchived === 'boolean') state.showArchived = p.showArchived;
     if (isThemeId(p.theme)) state.theme = p.theme;
   } catch { /* 忽略损坏的本地数据 */ }
   const requestedTheme = new URLSearchParams(location.search).get('theme');
@@ -209,6 +211,7 @@ function savePrefs() {
       focusKey: state.focusKey, filter: state.filter,
       treeOpen: state.treeOpen, alwaysOnTop: state.alwaysOnTop,
       autoFollowImportant: state.autoFollowImportant, theme: state.theme,
+      showArchived: state.showArchived,
     }));
   } catch { /* localStorage 不可用时静默 */ }
 }
@@ -222,7 +225,8 @@ function applyTheme(theme, persist = true) {
 }
 
 /* ---------- 数据派生 ---------- */
-const keyOf = (t) => t.project + '::' + t.id;
+/* 归档后 id 可能被新任务复用；完整 archive/... 目录才是归档任务的稳定身份。 */
+const keyOf = (t) => t.project + '::' + (t.archived && t.dir ? t.dir : t.id);
 const unfinished = (t) => t.status !== 'completed' && t.kind !== 'done';
 function runtimeProjectName(view) {
   if (!view) return null;
@@ -239,12 +243,12 @@ function projectNameForPath(path) {
   const parts = String(path).replace(/[/\\]+$/, '').split(/[/\\]+/);
   return parts[parts.length - 1] || null;
 }
-/* 由 '项目::任务id' 解析出任务标题（供播报/展示用，避免用内部 key） */
+/* 由任务 key 解析标题（供播报/展示用，避免暴露内部标识） */
 function taskTitleFor(focusKey) {
   const t = findTaskByKey(focusKey);
   return t ? (t.title || t.id) : null;
 }
-/* 由 '项目::任务id' 查找任务对象（含 .project/.projectPath 标注） */
+/* 由任务 key 查找任务对象（含 .project/.projectPath 标注） */
 function findTaskByKey(focusKey) {
   if (!focusKey) return null;
   for (const bucket of Object.values(state.tasksByProject)) {
@@ -252,6 +256,11 @@ function findTaskByKey(focusKey) {
     if (task) return task;
   }
   return null;
+}
+function archivedFocusTask(focusKey = state.focusKey) {
+  const task = findTaskByKey(focusKey);
+  if (!task || !task.archived) return null;
+  return !state.filter || task.project === state.filter ? task : null;
 }
 function archiveReceiptFor(focusKey = state.focusKey) {
   const receipt = state.archiveReceipt;
@@ -612,13 +621,13 @@ function lastSeen(t) {
 const LIVE_MS = 60 * 60e3;   // 1 小时内有会话视为「活跃中」
 const isLive = (t) => lastSeen(t) && (Date.now() - lastSeen(t) < LIVE_MS);
 
-/* 当前筛选下的任务池 */
+/* 当前筛选下的任务池（不含已归档任务：归档仅查看，不参与焦点/进度/统计） */
 function pool() {
   const names = state.filter ? [state.filter] : Object.keys(state.tasksByProject);
   const out = [];
   for (const n of names) {
     const bucket = state.tasksByProject[n];
-    if (bucket) out.push(...bucket.tasks);
+    if (bucket) out.push(...bucket.tasks.filter(t => !t.archived));
   }
   return out;
 }
@@ -634,13 +643,20 @@ function defaultFocus(tasks) {
   if (live.length) return live.sort((a, b) => (runtimeViewForTask(b).focusScore || 0) - (runtimeViewForTask(a).focusScore || 0) || lastSeen(b) - lastSeen(a))[0];
   return un.reduce((a, b) => ((b.mtime || 0) > (a.mtime || 0) ? b : a));
 }
-/* 当前聚焦任务；没有任何未完成任务时返回 null（空闲态） */
+/* 当前聚焦任务；没有任何未完成任务时返回 null（空闲态）。
+   手动锁定指向归档任务时（用户点击列表里的已归档项），从完整数据找回并展示。 */
 function currentFocus() {
   const p = pool();
   const archiveReceipt = archiveReceiptFor();
   if (archiveReceipt) return archiveReceipt.task;
+  /* 显式锁定优先；归档任务不在活跃池中，需从完整数据单独找回。 */
+  if (state.focusMode === 'manual' && state.focusKey) {
+    const explicit = p.find(t => keyOf(t) === state.focusKey)
+      || archivedFocusTask();
+    if (explicit) return explicit;
+  }
   if (!p.some(unfinished)) return null;
-  /* 显式锁定始终生效；focusLockUntil 仅作旧偏好兼容，不再悄悄解除用户锁定 */
+  /* focusLockUntil 仅作旧偏好兼容，不再悄悄解除用户锁定 */
   return p.find(t => keyOf(t) === state.focusKey) || defaultFocus(p);
 }
 function ensureFocusValid() {
@@ -649,13 +665,23 @@ function ensureFocusValid() {
     state.focusedTaskSnapshot = null;
   }
   if (archiveReceiptFor()) return;
-  if (state.focusKey && !pool().some(t => keyOf(t) === state.focusKey)) state.focusKey = null;
+  if (!state.focusKey) return;
+  /* 手动点击的归档任务不在活跃池中，但仍是有效的只读焦点。轮询刷新时
+     不能因此清掉锁定，否则自动跟随会在数秒后跳转到其它运行中的任务。 */
+  const manuallyPinned = state.focusMode === 'manual' && archivedFocusTask();
+  if (!pool().some(t => keyOf(t) === state.focusKey) && !manuallyPinned) state.focusKey = null;
 }
-/* 树列表：未完成全保留，已完成只留 mtime 最近 3 个 */
-function trimCompleted(tasks) {
-  const active = tasks.filter(unfinished);
-  const done = tasks.filter(t => !unfinished(t))
+/* 树列表：未完成全保留；已完成默认只留 mtime 最近 3 个。
+   勾选「显示已归档」时，全部已归档任务（t.archived）追加显示，普通已完成仍只留最近 3 个。 */
+function trimCompleted(tasks, showArchived) {
+  const active = tasks.filter(t => !t.archived && unfinished(t));
+  const done = tasks.filter(t => !unfinished(t) && !t.archived)
     .sort((a, b) => (b.mtime || 0) - (a.mtime || 0)).slice(0, 3);
+  if (showArchived) {
+    const archived = tasks.filter(t => t.archived)
+      .sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+    return [...active, ...done, ...archived];
+  }
   return [...active, ...done];
 }
 /* 按 parent / children 组树；parent 不在列表中时提升为顶层 */
@@ -1260,6 +1286,14 @@ function syncFit() {
      而不是在固定窗口内内部滚动。翻面 / 任务树仍保持固定窗口几何。 */
   const fit = state.mode === 'card' && !state.flipped && !state.treeOpen;
   document.body.classList.toggle('fit', fit);
+  /* fit 退出时清掉上一次写入的显式舞台高度，避免任务树 / 详情页继承正面卡片尺寸。 */
+  if (!fit) {
+    const world = $('world');
+    if (world) {
+      world.style.height = '';
+      world.style.maxHeight = '';
+    }
+  }
   scheduleWindowFit();
 }
 /* 渲染稳定后一次性把窗口高度对齐到内容高度：防抖 + 阈值，避免连续 set_size 打死 WKWebView */
@@ -1276,8 +1310,9 @@ function scheduleWindowFit() {
     /* 等 CSS 过渡（顶/底收起动画 .3s）落定后再量；用实际布局矩形而不是 scrollHeight（overflow:hidden 下不可靠） */
     const world = $('world'), card = $('card');
     if (!world || !card) return;
-    /* 关键：body.fit 下 .world 有 max-height:100vh（当前窗高），展开内容会被它顶住、卡片被压缩，
-       量出来的高度永远等于当前窗高 → 永远不达阈值。测量瞬间摘掉帽子取自然高度，同步代码不会重绘。 */
+    /* 关键：测量时移除舞台当前的尺寸约束，取内容自然高度；测量完成后
+       把目标高度显式写回舞台，避免原生窗口异步 resize 期间 flex 链又按旧视口收缩。 */
+    world.style.height = 'auto';
     world.style.maxHeight = 'none';
     let h;
     if (state.flipped) {
@@ -1312,7 +1347,14 @@ function scheduleWindowFit() {
          才有稳定的可用空间。 */
       if (card.dataset.kind === 'idle') h = Math.max(h, IDLE_WINDOW_HEIGHT);
     }
-    world.style.maxHeight = '';
+    /* 原生窗口高度有同一套屏幕上限；舞台也同步使用该上限，避免原生层被
+       截短时前端仍保留一个更高的内容层。 */
+    if (Number.isFinite(screen.availHeight)) {
+      h = Math.min(h, Math.max(160, Math.floor(screen.availHeight - 40)));
+    }
+    h = Math.max(160, Math.ceil(h));
+    world.style.height = `${h}px`;
+    world.style.maxHeight = `${h}px`;
     if (Math.abs(h - window.innerHeight) > 40) {
       call('fit_window_height', { height: h }).catch((error) => {
         console.error('[fit_window_height]', error);
@@ -1568,6 +1610,9 @@ function mdRender(src) {
 /* ---------- 层级树面板 ---------- */
 function renderTree(focused) {
   $('list').classList.toggle('open', !!state.treeOpen);
+  /* 同步「显示已归档」勾选框状态（加载持久化偏好或其它路径改动后保持一致） */
+  const chkArchived = $('chkShowArchived');
+  if (chkArchived) chkArchived.checked = !!state.showArchived;
   indexedTasks = [];
   const ul = $('tree');
   ul.setAttribute('role', 'tree');
@@ -1578,12 +1623,12 @@ function renderTree(focused) {
   const names = state.filter ? [state.filter] : state.projects.map(p => p.name);
   for (const name of names) {
     const bucket = state.tasksByProject[name];
-    const shown = trimCompleted(bucket ? bucket.tasks : []);
+    const shown = trimCompleted(bucket ? bucket.tasks : [], state.showArchived);
     if (!shown.length) continue;
 
     const projLi = document.createElement('li');
     projLi.className = 'proj';
-    const un = shown.filter(unfinished);
+    const un = shown.filter(t => !t.archived && unfinished(t));
     let best = 'done';
     for (const t of un) {
       if ((KIND_URGENCY[t.kind] ?? 9) < (KIND_URGENCY[best] ?? 9)) best = t.kind;
@@ -1624,7 +1669,7 @@ function taskNode(task, kids, focused, level) {
   const hasKids = !!(sub && sub.length);
   const collapsed = hasKids && treeCollapsed.has(key);
   const row = document.createElement('div');
-  row.className = 'row' + (isSelected ? ' on' : '');
+  row.className = 'row' + (isSelected ? ' on' : '') + (task.archived ? ' archived' : '');
   row.tabIndex = 0;   /* 行本体可聚焦：Tab 可到达，Enter/Space 选中 */
   row.setAttribute('role', 'treeitem');
   row.setAttribute('aria-level', String(level || 1));
@@ -1659,10 +1704,10 @@ function taskNode(task, kids, focused, level) {
         ${isLive(task) ? '<span class="live-dot" title="有活跃会话"></span>' : ''}
         <div class="bar"><i style="width:${pct}%;background:${color}"></i></div>
       </div>
-      <div class="sub">${esc(subLabel)}</div>
+      <div class="sub">${task.archived ? '<span class="archived-tag" title="已归档任务，仅查看">已归档</span>' : ''}${esc(subLabel)}</div>
     </div>
-    <button type="button" class="tree-archive" data-key="${esc(key)}" title="归档 ${esc(task.title || task.id)}"
-      aria-label="归档 ${esc(task.title || task.id)}">归档</button>
+    ${task.archived ? '<span class="lane archived-lane" title="已归档">·</span>' : `<button type="button" class="tree-archive" data-key="${esc(key)}" title="归档 ${esc(task.title || task.id)}"
+      aria-label="归档 ${esc(task.title || task.id)}">归档</button>`}
     <span class="lane" title="${esc(subLabel)}">${esc(laneLabel)}</span>`;
   const pick = () => focusTask(task);
   /* 点击行主体：选中（不切换展开） */
@@ -2746,6 +2791,16 @@ function bindUI() {
   $('btnAdmin').onclick = () => { toggleMenu(false); toggleAdmin(); };
   if ($('btnAdminClose')) $('btnAdminClose').onclick = () => closeAdmin();
   if ($('btnTreeClose')) $('btnTreeClose').onclick = () => closeTree();
+  /* 「显示已归档」勾选框：切换后立即重渲染任务树 */
+  const chkArchived = $('chkShowArchived');
+  if (chkArchived) {
+    chkArchived.checked = !!state.showArchived;
+    chkArchived.onchange = () => {
+      state.showArchived = chkArchived.checked;
+      savePrefs();
+      if (state.view === 'main') render();
+    };
+  }
   $('btnHide').onclick = () => { toggleMenu(false); hideWindow(); };
   $('btnFlip').onclick = () => { toggleMenu(false); closeProjectPop(); toggleFlip(); };
   $('btnMenu').onclick = (e) => { e.stopPropagation(); toggleMenu(); };
@@ -2911,6 +2966,13 @@ function bindExcerptFit() {
   });
   document.addEventListener('mouseout', (e) => {
     if (e.target.closest && e.target.closest('.excerpt')) scheduleWindowFit();
+  });
+  /* 原生窗口 resize 完成后，WebView 的 innerHeight 才会更新；重新测量
+     可避免卡片仍按 resize 前的视口高度布局，导致底部出现透明空白。 */
+  window.addEventListener('resize', () => {
+    if (state.view === 'main' && state.mode === 'card' && !state.treeOpen) {
+      scheduleWindowFit();
+    }
   });
 }
 

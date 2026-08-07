@@ -330,10 +330,25 @@ body[data-mode="capsule"] .card{display:none}
 
 /* ---------- 卡片高度自适应：内容定高，底部透明；超出 100vh 时 card 收缩、摘要滚动 ---------- */
 body.fit .world{height:auto;max-height:100vh}
-/* 翻面双面是绝对定位、无固有高度，自适应时正面必须回到文档流 */
-body.fit .flip{flex:1;min-height:0}
-body.fit .flip-inner{position:relative;inset:auto;transform:none;height:100%}
-body.fit .face{position:relative;inset:auto;transform:none;visibility:visible;height:100%}
+/* WKWebView 对嵌套 flex:1 的可用高度传播并不稳定。舞台高度由 JS 明确写入后，
+   正面链路也显式占满它，避免 .flip 只保持内容高度而卡片底部留空。 */
+body.fit .main-view{height:100%;flex:0 0 100%;min-height:0}
+body.fit .card{height:100%;flex:1 1 auto;min-height:0;align-self:stretch}
+/* 正面自适应时不需要 3D 翻面。改用完整的普通 flex 高度链，避免 WKWebView
+   在 absolute/relative 与 preserve-3d 切换后保留旧合成层位置，导致内容整体上移。 */
+body.fit .flip{
+  display:flex;flex:1;min-height:0;flex-direction:column;
+  perspective:none;transform:none;inset:auto
+}
+body.fit .flip-inner{
+  position:static;inset:auto;display:flex;flex:1;min-height:0;height:auto;
+  transform:none;transform-style:flat;transition:none
+}
+body.fit .face{
+  position:static;inset:auto;flex:1;min-height:0;height:auto;
+  transform:none;visibility:visible;
+  backface-visibility:visible;-webkit-backface-visibility:visible;transition:none
+}
 body.fit .face.back{display:none}
 /* 空闲态保持标准卡片几何；否则 fit 模式会只按占位文案收缩 card，
    即使原生窗口已扩高也只会留下透明空白。 */
@@ -689,13 +704,37 @@ body.fit.admin-open .card,body.fit.admin-open .card[data-kind="idle"]{flex:1;min
 /* 设置是覆盖层，不参与卡片高度累加；窗口尺寸由其自身内容高度决定。 */
 body.fit .sheet.settings{position:absolute;bottom:0;max-height:100%;height:auto}
 body.fit .sheet.settings #adminBody{overflow:auto;flex:1 1 auto;min-height:0}
-/* 关闭时直接移除设置 sheet，避免 transform 在高度变化时留下残片。 */
-body.fit .sheet.settings:not(.open){display:none}
+/* 关闭的 sheet 不能只靠 translateY 藏在卡片外：其保留的大型合成层会干扰
+   WKWebView 的高度测量并留下透明空白。aria-hidden 是渲染状态的单一依据。 */
+.sheet[aria-hidden="true"]{display:none}
 .sheet.open{transform:none;opacity:1;pointer-events:auto}
 .sheet::before{content:"";position:absolute;top:7px;left:50%;transform:translateX(-50%);width:30px;height:3px;border-radius:99px;background:var(--line2)}
 .list-h{flex-shrink:0;padding:12px 14px 5px;font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);display:flex;justify-content:space-between;align-items:center}
 .sheet-h-right{display:inline-flex;align-items:center;gap:8px}
 .sheet-close{flex-shrink:0}
+/* 「显示已归档」勾选框：列表右上角，紧凑 mono 风格 */
+.archived-toggle{
+  display:inline-flex;align-items:center;gap:5px;cursor:pointer;
+  font-family:var(--mono);font-size:8.5px;font-weight:600;color:var(--dim);
+  padding:2px 6px;border-radius:6px;border:1px solid transparent;
+  transition:color .18s,border-color .18s,background .18s;
+  white-space:nowrap;
+}
+.archived-toggle:hover{color:var(--chalk);border-color:var(--line2);background:rgba(255,255,255,.04)}
+.archived-toggle input{
+  appearance:none;-webkit-appearance:none;width:10px;height:10px;flex-shrink:0;
+  border:1px solid var(--line2);border-radius:3px;background:rgba(255,255,255,.04);
+  cursor:pointer;margin:0;position:relative;transition:.18s;
+}
+.archived-toggle input:checked{
+  background:color-mix(in srgb,var(--accent,var(--amber)) 22%,transparent);
+  border-color:color-mix(in srgb,var(--accent,var(--amber)) 55%,var(--line2));
+}
+.archived-toggle input:checked::after{
+  content:"";position:absolute;left:2px;top:0;width:4px;height:7px;
+  border:solid var(--chalk);border-width:0 1.5px 1.5px 0;transform:rotate(45deg);
+}
+.archived-toggle input:focus-visible{outline:1px solid var(--accent,var(--amber));outline-offset:1px}
 
 /* ---------- 层级树 ---------- */
 .tree{list-style:none;margin:0;padding:2px 8px 4px;overflow:auto;min-height:0}
@@ -736,6 +775,20 @@ body.fit .sheet.settings:not(.open){display:none}
   background:transparent;color:var(--dim);cursor:pointer;white-space:nowrap;
   opacity:.55;transition:opacity .15s,color .15s,background .15s,border-color .15s;
 }
+/* 已归档任务行：整体灰显、淡化，区分于活跃任务 */
+.node .row.archived{opacity:.55}
+.node .row.archived:hover{opacity:.85}
+.node .row.archived .t{color:var(--dim);text-decoration:line-through;text-decoration-color:rgba(236,234,226,.25)}
+.node .row.archived .d{filter:grayscale(.6);opacity:.7}
+.node .row.archived .bar{opacity:.5}
+/* 已归档小标签：位于 sub 行，低调标注 */
+.archived-tag{
+  display:inline-flex;align-items:center;margin-right:5px;vertical-align:1px;
+  font-family:var(--mono);font-size:7px;font-weight:700;letter-spacing:.04em;
+  color:var(--dim);border:1px solid var(--line2);border-radius:4px;padding:0 4px;
+  text-transform:none;
+}
+.archived-lane{color:var(--dim);opacity:.6}
 .node .row:hover .tree-archive,
 .node .tree-archive:focus-visible{opacity:1}
 .node .tree-archive:hover{color:var(--chalk);background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.2)}
