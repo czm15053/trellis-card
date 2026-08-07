@@ -14,7 +14,6 @@
     running: ['编译中…', '构建中…', '执行中…', '部署中…', '运行流水线中…'],
     searching: ['扫描中…', '搜索中…', '建立索引中…', '追踪中…', '分析性能中…'],
     delegating: ['启动进程中…', '分叉中…', '派发中…', '排队任务中…'],
-    thinking: ['设计架构中…', '设计中…', '计算中…', '调试中…', '优化中…'],
     done: ['构建完成！', '已发布！', '已合并！', '全部通过！', '测试通过！'],
     waiting: ['等待输入…', '依赖未就绪…', '轮询中…'],
     skill: ['阅读手册中…', '查看文档中…', '加载模块中…'],
@@ -173,7 +172,8 @@
     const input = normalizeToolInput(context);
 
     if (normalizedEvent === 'notification') return raw || null;
-    if (normalizedEvent === 'userpromptsubmit') return pick('thinking', 'event:UserPromptSubmit');
+    /* 用户提交输入不是可观测的 Agent 活动，不能伪造“计算/设计/优化中”等进度。 */
+    if (normalizedEvent === 'userpromptsubmit') return raw || null;
     if (normalizedEvent === 'pretooluse' || normalizedEvent === 'posttooluse') {
       return toolActivity(tool, input) || raw || null;
     }

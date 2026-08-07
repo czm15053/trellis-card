@@ -41,6 +41,7 @@ fn shell_segments(command: &str) -> impl Iterator<Item = &str> {
 fn segment_has_task_script(segment: &str) -> bool {
     segment.split_whitespace().any(|token| {
         let token = token.trim_matches(|c: char| c == '\'' || c == '"');
+        let token = crate::platform::to_posix(token);
         token == "task.py" || token.ends_with("/task.py")
     })
 }
@@ -48,6 +49,7 @@ fn segment_has_task_script(segment: &str) -> bool {
 fn segment_has_script(segment: &str, script: &str) -> bool {
     segment.split_whitespace().any(|token| {
         let token = token.trim_matches(|c: char| c == '\'' || c == '"');
+        let token = crate::platform::to_posix(token);
         token == script || token.ends_with(&format!("/{script}"))
     })
 }
@@ -70,13 +72,16 @@ pub fn classify_tool(tool_name: &str, command: &str, skill: &str) -> Option<Trel
         if !segment_has_task_script(segment) {
             continue;
         }
-        let tokens: Vec<&str> = segment
+        let tokens: Vec<String> = segment
             .split_whitespace()
-            .map(|token| token.trim_matches(|c: char| c == '\'' || c == '"'))
+            .map(|token| {
+                let token = token.trim_matches(|c: char| c == '\'' || c == '"');
+                crate::platform::to_posix(token)
+            })
             .collect();
         for (index, token) in tokens.iter().enumerate() {
-            if (*token == "task.py" || token.ends_with("/task.py")) && index + 1 < tokens.len() {
-                if let Some(action) = action_for_task_subcommand(tokens[index + 1]) {
+            if (token == "task.py" || token.ends_with("/task.py")) && index + 1 < tokens.len() {
+                if let Some(action) = action_for_task_subcommand(&tokens[index + 1]) {
                     return Some(action);
                 }
             }
@@ -88,6 +93,7 @@ pub fn classify_tool(tool_name: &str, command: &str, skill: &str) -> Option<Trel
 pub fn extract_task_dir(text: &str) -> Option<String> {
     for raw in text.split_whitespace() {
         let token = raw.trim_matches(|c: char| "'\"()[]{}<>,;".contains(c));
+        let token = crate::platform::to_posix(token);
         let components: Vec<&str> = token.split('/').filter(|part| !part.is_empty()).collect();
         for parts in components.windows(3) {
             if parts[0] == ".trellis" && parts[1] == "tasks" && !parts[2].is_empty() {

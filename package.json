@@ -1,13 +1,13 @@
 {
   "name": "trellis-card",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Read-only desktop observer for Trellis tasks and Agent activity",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
-    "test": "node --test test/focus-policy.test.js test/activity-display.test.js test/smoke.test.js && cargo test --manifest-path src-tauri/Cargo.toml --quiet",
+    "test": "node -e \"const fs=require('fs');const {execFileSync}=require('child_process');if(fs.existsSync('test'))execFileSync(process.execPath,['--test','test/focus-policy.test.js','test/activity-display.test.js','test/smoke.test.js'],{stdio:'inherit'});\" && cargo test --manifest-path src-tauri/Cargo.toml --quiet",
     "check": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings"
   },
   "devDependencies": {

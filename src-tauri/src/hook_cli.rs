@@ -107,9 +107,8 @@ fn project_root_for_path(path: &str) -> String {
     }
     loop {
         if current.join(".trellis").join("tasks").is_dir() {
-            return current
-                .canonicalize()
-                .unwrap_or(current)
+            /* canonicalize + 去 Windows \\?\ 前缀，与 lib.rs 的项目路径保持一致 */
+            return crate::platform::normalize_path(&current)
                 .to_string_lossy()
                 .into_owned();
         }
@@ -127,21 +126,24 @@ fn looks_like_task_id(value: &str) -> bool {
 }
 
 fn extract_task_arg(command: &str, tool_name: Option<&str>) -> Option<String> {
-    let tokens: Vec<&str> = command
+    let tokens: Vec<String> = command
         .split_whitespace()
-        .map(|token| token.trim_matches(|c: char| "'\"()[]{}<>,;".contains(c)))
+        .map(|token| {
+            let token = token.trim_matches(|c: char| "'\"()[]{}<>,;".contains(c));
+            crate::platform::to_posix(token)
+        })
         .collect();
     let tool = tool_name.filter(|name| name.starts_with("trellis-"));
     for (index, token) in tokens.iter().enumerate() {
-        let is_trellis_tool = tool.is_some_and(|name| *token == name);
-        let is_task_script = *token == "task.py" || token.ends_with("/task.py");
+        let is_trellis_tool = tool.is_some_and(|name| token == name);
+        let is_task_script = token == "task.py" || token.ends_with("/task.py");
         if !is_trellis_tool && !is_task_script {
             continue;
         }
         let start = index + usize::from(is_task_script) + 1;
-        if let Some(candidate) = tokens.get(start).copied() {
+        if let Some(candidate) = tokens.get(start) {
             if looks_like_task_id(candidate) {
-                return Some(candidate.to_owned());
+                return Some(candidate.clone());
             }
         }
     }
@@ -259,6 +261,8 @@ fn current_task_fallback(project: &str) -> Option<String> {
 }
 
 fn payload_path_belongs_to_project(project: &str, token: &str) -> bool {
+    // Windows 路径用反斜杠分隔，先归一化再查找 `.trellis/tasks/` 子串
+    let token = crate::platform::to_posix(token);
     let Some(marker) = token.find(".trellis/tasks/") else {
         return false;
     };
@@ -277,7 +281,7 @@ fn payload_path_belongs_to_project(project: &str, token: &str) -> bool {
     let project = project
         .canonicalize()
         .unwrap_or_else(|_| project.to_path_buf());
-    candidate == project
+    crate::platform::path_eq_ignore_case(&candidate.to_string_lossy(), &project.to_string_lossy())
 }
 
 fn task_dir_from_payload(project: &str, input: &str) -> Option<String> {
@@ -499,8 +503,8 @@ mod tests {
         let project = temp_project("read-tool");
         let payload = format!(
             r#"{{"cwd":"{}","session_id":"s-read","hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{{"file_path":"{}/.trellis/tasks/07-demo/task.json"}}}}"#,
-            project.display(),
-            project.display()
+            jpath(&project),
+            jpath(&project)
         );
         let event = parse_hook_payload(&payload, &HookOverrides::default()).unwrap();
         assert_eq!(event.task_id.as_deref(), Some("07-demo"));
@@ -540,12 +544,12 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         let payload = format!(
             r#"{{"cwd":"{}","tool_name":"trellis-implement","tool_input":{{"command":"trellis-implement 07-demo"}}}}"#,
-            nested.display()
+            jpath(&nested)
         );
         let event = parse_hook_payload(&payload, &HookOverrides::default()).unwrap();
         assert_eq!(
             event.project,
-            project.canonicalize().unwrap().to_string_lossy()
+            crate::platform::normalize_path(&project).to_string_lossy()
         );
         assert_eq!(event.task_id.as_deref(), Some("07-demo"));
         let _ = std::fs::remove_dir_all(project);
@@ -564,7 +568,7 @@ mod tests {
         .unwrap();
         let payload = format!(
             r#"{{"cwd":"{}","session_id":"session-1","hook_event_name":"PreToolUse"}}"#,
-            project.display()
+            jpath(&project)
         );
         let event = parse_hook_payload(&payload, &HookOverrides::default()).unwrap();
         assert_eq!(event.task_id.as_deref(), Some("07-demo"));
@@ -583,7 +587,7 @@ mod tests {
         .unwrap();
         let payload = format!(
             r#"{{"cwd":"{}","session_id":"rotated-session","hook_event_name":"PreToolUse"}}"#,
-            project.display()
+            jpath(&project)
         );
         let event = parse_hook_payload(&payload, &HookOverrides::default()).unwrap();
         assert_eq!(event.task_id.as_deref(), Some("07-demo"));
@@ -599,7 +603,7 @@ mod tests {
         std::fs::create_dir_all(project.join(".trellis/tasks/07-local")).unwrap();
         let payload = format!(
             r#"{{"cwd":"{}","session_id":"session-2","hook_event_name":"PreToolUse","tool_input":{{"command":"cat /other/.trellis/tasks/07-other/prd.md"}}}}"#,
-            project.display()
+            jpath(&project)
         );
         let event = parse_hook_payload(&payload, &HookOverrides::default()).unwrap();
         assert_eq!(event.task_id, None);
@@ -615,6 +619,12 @@ mod tests {
         project
     }
 
+    // 测试里把路径内插进 JSON payload 时，Windows 路径含反斜杠（\U、\T 等）会让
+    // serde_json 报 "invalid escape"。统一转义为合法的 \\。
+    fn jpath(path: &std::path::Path) -> String {
+        path.display().to_string().replace('\\', "\\\\")
+    }
+
     #[test]
     fn current_task_path_pointer_falls_back_when_no_session() {
         let project = temp_project("ct-path");
@@ -625,7 +635,7 @@ mod tests {
         .unwrap();
         let payload = format!(
             r#"{{"cwd":"{}","session_id":"unknown-session","hook_event_name":"SessionStart"}}"#,
-            project.display()
+            jpath(&project)
         );
         let event = parse_hook_payload(&payload, &HookOverrides::default()).unwrap();
         assert_eq!(event.task_id.as_deref(), Some("07-demo"));
@@ -638,7 +648,7 @@ mod tests {
         std::fs::write(project.join(".trellis/.current-task"), "07-demo").unwrap();
         let payload = format!(
             r#"{{"cwd":"{}","session_id":"unknown-session","hook_event_name":"SessionStart"}}"#,
-            project.display()
+            jpath(&project)
         );
         let event = parse_hook_payload(&payload, &HookOverrides::default()).unwrap();
         assert_eq!(event.task_id.as_deref(), Some("07-demo"));
@@ -650,7 +660,7 @@ mod tests {
         let project = temp_project("ct-missing");
         let payload = format!(
             r#"{{"cwd":"{}","session_id":"unknown-session","hook_event_name":"SessionStart"}}"#,
-            project.display()
+            jpath(&project)
         );
         let event = parse_hook_payload(&payload, &HookOverrides::default()).unwrap();
         assert_eq!(event.task_id, None);
@@ -663,7 +673,7 @@ mod tests {
         std::fs::write(project.join(".trellis/.current-task"), "07-ghost").unwrap();
         let payload = format!(
             r#"{{"cwd":"{}","session_id":"unknown-session","hook_event_name":"SessionStart"}}"#,
-            project.display()
+            jpath(&project)
         );
         let event = parse_hook_payload(&payload, &HookOverrides::default()).unwrap();
         assert_eq!(event.task_id, None);
@@ -683,7 +693,7 @@ mod tests {
         std::fs::write(project.join(".trellis/.current-task"), "07-demo").unwrap();
         let payload = format!(
             r#"{{"cwd":"{}","session_id":"session-9","hook_event_name":"SessionStart"}}"#,
-            project.display()
+            jpath(&project)
         );
         let event = parse_hook_payload(&payload, &HookOverrides::default()).unwrap();
         assert_eq!(event.task_id.as_deref(), Some("07-demo"));
@@ -697,8 +707,8 @@ mod tests {
         std::fs::write(project.join(".trellis/.current-task"), "07-demo").unwrap();
         let payload = format!(
             r#"{{"cwd":"{}","session_id":"unknown-session","hook_event_name":"PreToolUse","tool_input":{{"command":"cat {}/.trellis/tasks/08-other/prd.md"}}}}"#,
-            project.display(),
-            project.display()
+            jpath(&project),
+            jpath(&project)
         );
         let event = parse_hook_payload(&payload, &HookOverrides::default()).unwrap();
         assert_eq!(event.task_id.as_deref(), Some("08-other"));

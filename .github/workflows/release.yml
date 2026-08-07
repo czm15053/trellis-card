@@ -1,0 +1,108 @@
+name: Release
+
+# 打 tag 时触发多平台构建：Windows (NSIS .exe + MSI + 便携版)、macOS arm64 + Intel (dmg)。
+# 每个平台在各自的 GitHub runner 上编译，规避了 mac 无法交叉编译 Windows 的限制。
+# build 产出 bundle 存为 artifact；release job 汇总后发布到 GitHub Release。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: macos-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: npm install
+
+      # 仅 Intel mac（x86_64-apple-darwin）交叉编译需要 llvm-rc 编译资源；
+      # Apple Silicon mac 用默认工具链，Windows runner 自带 MSVC 的 rc.exe。
+      - name: Install llvm-rc (macOS x64 only)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: |
+          brew install llvm
+          echo "/opt/homebrew/opt/llvm/bin:/usr/local/opt/llvm/bin" >> "$GITHUB_PATH"
+
+      - name: Run available tests
+        # 本地未跟踪的 JS 测试存在时运行；CI 始终运行 Rust 测试。
+        run: npm test
+
+      - name: Build (Tauri)
+        run: npm run build -- --target ${{ matrix.target }}
+        env:
+          # 未配置签名密钥时不阻塞构建
+          TAURI_SIGNING_PRIVATE_KEY: ""
+
+      # 上传 bundle 产物到 artifact（release job 汇总用）
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/**
+          if-no-files-found: error
+
+  # 汇总所有平台的 bundle，发布为一个 GitHub Release
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all bundle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: bundles
+          merge-multiple: true
+
+      # 只收集最终安装包（dmg/exe/msi）到顶层，过滤中间产物（icon、脚本、裸二进制等）。
+      # bundle/** 上传保留了平台子目录结构，合并后嵌套在 bundles/ 下，需 find 收拢。
+      - name: Collect installer artifacts
+        run: |
+          mkdir -p installers
+          find bundles -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) -exec cp {} installers/ \;
+          ls -la installers/
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Trellis Card ${{ github.ref_name }}
+          files: installers/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false

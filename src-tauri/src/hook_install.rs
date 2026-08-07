@@ -22,9 +22,18 @@ pub struct HookStatus {
 }
 
 fn is_owned_command(command: &str) -> bool {
-    command
-        .replace(['"', '\''], "")
-        .contains("trellis-card hook")
+    let stripped = command.replace(['"', '\''], "");
+    /* 定位 ` hook ` 参数，取它之前的整段作为可执行文件路径（含空格路径）。
+    无 hook 子命令的无关命令直接排除。 */
+    let Some(idx) = stripped.find(" hook ") else {
+        return false;
+    };
+    let exe_path = &stripped[..idx];
+    let exe_path = exe_path.trim_end_matches(".exe");
+    /* basename（去掉目录分隔符）后忽略大小写比较。
+    Windows 下 exe 可能是 trellis-card.exe 或 productName 重命名的 Trellis-Card.exe。 */
+    let name = exe_path.rsplit(['/', '\\']).next().unwrap_or_default();
+    name.eq_ignore_ascii_case("trellis-card")
 }
 
 fn remove_owned(value: &mut Value) {
@@ -196,6 +205,21 @@ fn default_config_path(agent: &str, home: &Path) -> PathBuf {
     }
 }
 
+fn hook_command(executable: &Path, agent: &str) -> String {
+    let path = executable.to_string_lossy();
+    if cfg!(windows) {
+        /* Hook 可能由 cmd.exe 或 PowerShell 执行。显式启动 PowerShell，避免
+        `&` 在 cmd 中被当作命令分隔符；单引号路径可正确处理空格。 */
+        let escaped_path = path.replace('\'', "''");
+        format!(
+            r#"powershell.exe -NoProfile -NonInteractive -Command "& '{}' hook --agent {}""#,
+            escaped_path, agent
+        )
+    } else {
+        format!(r#""{}" hook --agent {}"#, path, agent)
+    }
+}
+
 pub fn install_hooks(agent: &str, uninstall: bool) -> Result<PathBuf, String> {
     if !matches!(agent, "claude" | "codex") {
         return Err("agent must be codex or claude".into());
@@ -210,11 +234,7 @@ pub fn install_hooks(agent: &str, uninstall: bool) -> Result<PathBuf, String> {
         codex_toml = Some((toml_path, toml));
     }
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let command = format!(
-        "\"{}\" hook --agent {}",
-        executable.to_string_lossy(),
-        agent
-    );
+    let command = hook_command(&executable, agent);
     merge_hooks(&mut config, &command, uninstall)?;
     if !uninstall || config_exists {
         let data = serde_json::to_vec_pretty(&config).map_err(|error| error.to_string())?;
@@ -314,6 +334,43 @@ mod tests {
         assert!(!is_owned_command(
             "/opt/trellis-card-other hook --agent codex"
         ));
+    }
+
+    #[test]
+    fn hook_command_uses_platform_shell_syntax() {
+        let command = hook_command(
+            Path::new(r#"C:\Program Files\Trellis-Card\trellis-card.exe"#),
+            "claude",
+        );
+        if cfg!(windows) {
+            assert_eq!(
+                command,
+                r#"powershell.exe -NoProfile -NonInteractive -Command "& 'C:\Program Files\Trellis-Card\trellis-card.exe' hook --agent claude""#
+            );
+        } else {
+            assert_eq!(
+                command,
+                r#""C:\Program Files\Trellis-Card\trellis-card.exe" hook --agent claude"#
+            );
+        }
+    }
+
+    #[test]
+    fn ownership_matching_handles_windows_exe_paths() {
+        /* Windows: bin 名或 productName 重命名，带 .exe 扩展名、反斜杠路径 */
+        assert!(is_owned_command(
+            r#""C:\Users\foo\AppData\Local\Trellis-Card\trellis-card.exe" hook --agent codex"#
+        ));
+        assert!(is_owned_command(
+            r#""C:\Users\foo\AppData\Local\Trellis-Card\Trellis-Card.exe" hook --agent claude"#
+        ));
+        assert!(is_owned_command(
+            r"C:\Program Files\Trellis-Card\trellis-card.exe hook --agent codex"
+        ));
+        assert!(!is_owned_command(
+            r#""C:\Users\foo\trellis-card-other.exe" hook --agent codex"#
+        ));
+        assert!(!is_owned_command("C:\\x\\trellis-card.exe install"));
     }
 
     #[test]

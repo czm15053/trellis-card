@@ -28,7 +28,9 @@ pub fn inbox_dir() -> PathBuf {
 
 /* Unix socket paths have a small platform-defined limit on macOS. Keep the
 socket in /tmp and derive a stable per-config name so long HOME paths do not
-break hook delivery. */
+break hook delivery.
+Windows 没有 Unix socket，用 Named Pipe（\\?\pipe\...），名字固定、不依赖
+用户主目录长度，与 ipc.rs 的 NamedPipeListener 对应。 */
 pub fn socket_path() -> PathBuf {
     #[cfg(unix)]
     {
@@ -39,7 +41,11 @@ pub fn socket_path() -> PathBuf {
         }
         PathBuf::from(format!("/tmp/trellis-card-{hash:016x}.sock"))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        PathBuf::from(r"\\.\pipe\trellis-card-hook")
+    }
+    #[cfg(all(not(unix), not(windows)))]
     {
         app_config_dir().join("events.sock")
     }
@@ -62,7 +68,12 @@ pub fn save(cfg: &AppConfig) -> Result<(), String> {
 pub fn expand_home(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix('~') {
         if let Some(home) = dirs::home_dir() {
-            return home.join(rest.trim_start_matches('/'));
+            // 兼容 Windows 的 ~\proj 与 macOS 的 ~/proj；其余分隔符交给 join
+            let rest = rest
+                .trim_start_matches('/')
+                .trim_start_matches('\\')
+                .replace('\\', "/");
+            return home.join(rest);
         }
     }
     PathBuf::from(p)

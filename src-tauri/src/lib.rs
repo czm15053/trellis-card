@@ -4,6 +4,7 @@ mod focus;
 mod hook_cli;
 mod hook_install;
 mod ipc;
+mod platform;
 mod progress;
 mod runtime;
 mod scan;
@@ -113,7 +114,15 @@ pub(crate) fn discover_all(cfg: &AppConfig) -> Vec<PathBuf> {
     let mut seen: std::collections::HashSet<PathBuf> = out.iter().cloned().collect();
     for project in &cfg.dynamic_projects {
         let dir = expand(project);
-        if dir.join(".trellis").join("tasks").is_dir() && seen.insert(dir.clone()) {
+        // 路径比较用大小写不敏感（Windows 文件系统）；去重用 os 原生 PathBuf
+        let dup = seen.iter().any(|seen_path| {
+            crate::platform::path_eq_ignore_case(
+                &seen_path.to_string_lossy(),
+                &dir.to_string_lossy(),
+            )
+        });
+        if dir.join(".trellis").join("tasks").is_dir() && !dup {
+            seen.insert(dir.clone());
             out.push(dir);
         }
     }
@@ -128,7 +137,7 @@ fn project_dir_for_path(path: &Path) -> Option<PathBuf> {
     };
     loop {
         if current.join(".trellis").join("tasks").is_dir() {
-            return current.canonicalize().ok().or(Some(current));
+            return Some(platform::normalize_path(&current));
         }
         if !current.pop() {
             return None;
@@ -150,11 +159,16 @@ fn register_dynamic_project(state: &AppState, path: &str) -> Option<(PathBuf, bo
         .dynamic_projects
         .iter()
         .map(|stored| expand(stored))
-        .any(|stored| stored == project)
+        .any(|stored| {
+            crate::platform::path_eq_ignore_case(
+                &stored.to_string_lossy(),
+                &project.to_string_lossy(),
+            )
+        })
     {
         return Some((project, false));
     }
-    let stored = project.to_string_lossy().into_owned();
+    let stored = platform::strip_device_prefix(&project.to_string_lossy());
     cfg.dynamic_projects.push(stored);
     let snapshot = cfg.clone();
     drop(cfg);
@@ -178,7 +192,9 @@ fn discover_all_roots(cfg: &AppConfig) -> Vec<PathBuf> {
 }
 
 fn is_discovered_project(cfg: &AppConfig, project: &Path) -> bool {
-    discover_all_roots(cfg).iter().any(|found| found == project)
+    discover_all_roots(cfg).iter().any(|found| {
+        crate::platform::path_eq_ignore_case(&found.to_string_lossy(), &project.to_string_lossy())
+    })
 }
 
 // 允许访问 roots 扫描到的项目，以及 Hook 已发现的动态项目。
@@ -198,6 +214,36 @@ fn now_seconds() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or_default()
+}
+
+// 按平台候选探测可用的 Python 命令（对齐上游 init.ts 的 PYTHON_CANDIDATES）。
+// 返回可执行的命令；全部探测失败时退回第一个候选（由调用方拿到 Command 错误）。
+fn resolve_python_command() -> &'static str {
+    for candidate in platform::python_candidates() {
+        if candidate == "py -3" {
+            // py 启动器需带参数探测，这里仅检查命令存在
+            if std::process::Command::new("py")
+                .arg("-3")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+            {
+                return candidate;
+            }
+            continue;
+        }
+        if std::process::Command::new(candidate)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return candidate;
+        }
+    }
+    // 全部失败：退回平台默认，让 Command 的 spawn 错误自然暴露给调用方
+    platform::python_candidates()[0]
 }
 
 fn task_key(project: &str, task_id: &str) -> String {
@@ -227,7 +273,7 @@ fn build_runtime_snapshot(state: &AppState) -> RuntimeSnapshot {
     let mut activities = Vec::new();
     let mut errors = Vec::new();
     for project_dir in projects {
-        let project = project_dir.to_string_lossy().into_owned();
+        let project = platform::strip_device_prefix(&project_dir.to_string_lossy());
         let (tasks, task_errors) = scan::scan_tasks(&project_dir);
         errors.extend(task_errors);
         for task in tasks {
@@ -311,7 +357,7 @@ where
         let Some((project, added)) = register_dynamic_project(&state, &event.project) else {
             continue;
         };
-        event.project = project.to_string_lossy().into_owned();
+        event.project = platform::strip_device_prefix(&project.to_string_lossy());
         dynamic_project_added |= added;
         if event.action == Some(TrellisAction::Create) || project_hint.is_none() {
             project_hint = Some(event.project.clone());
@@ -461,7 +507,7 @@ fn add_root(state: State<AppState>, path: String) -> Result<RootsOut, String> {
     if !dir.is_dir() {
         return Err("目录不存在或不可读".into());
     }
-    let canonical = dir.to_string_lossy().into_owned();
+    let canonical = platform::strip_device_prefix(&dir.to_string_lossy());
     let mut cfg = state.config.lock().unwrap();
     cfg.initialized = true;
     if !cfg.roots.contains(&canonical) {
@@ -634,7 +680,9 @@ fn archive_task(
     task: String,
 ) -> Result<bool, String> {
     let (project_dir, script) = resolve_archivable_task(&state, &project, &task)?;
-    let output = std::process::Command::new("python3")
+    // 按平台候选探测可用的 Python 命令（win32: python/python3/py -3）
+    let python = resolve_python_command();
+    let output = std::process::Command::new(python)
         .arg(script)
         .args(["archive", &task])
         .current_dir(&project_dir)
@@ -855,7 +903,10 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::create_dir_all(project.join(".trellis/tasks")).unwrap();
 
-        assert_eq!(project_dir_for_path(&nested), project.canonicalize().ok());
+        assert_eq!(
+            project_dir_for_path(&nested),
+            Some(platform::normalize_path(&project))
+        );
         std::fs::remove_dir_all(project).unwrap();
     }
 
@@ -1067,19 +1118,18 @@ mod tests {
             r#"{"id":"02-27-user-login","title":"User login","status":"in_progress"}"#,
         )
         .unwrap();
-        /* canonicalize 对齐 parse_hook_payload 的路径输出（/var ↔ /private/var） */
-        let project = project.canonicalize().unwrap_or(project);
+        /* normalize 对齐 parse_hook_payload 的路径输出（/var ↔ /private/var，去 Windows \\?\ 前缀） */
+        let project = platform::normalize_path(&project);
         (root, state_with_project(&project))
     }
 
     #[test]
     fn hook_payload_reaches_runtime_snapshot_end_to_end() {
         let (root, state) = hook_fixture("flow");
-        let project = root
-            .join("alpha")
-            .canonicalize()
-            .unwrap_or_else(|_| root.join("alpha"));
+        let project = platform::normalize_path(&root.join("alpha"));
         let project_str = project.to_string_lossy().into_owned();
+        // Windows 路径含反斜杠，JSON 里要转义，否则 "invalid escape"
+        let project_json = project_str.replace('\\', "\\\\");
 
         /* 1) 真实 Codex 风格 payload → 解析成 HookEvent */
         let payload = format!(
@@ -1087,7 +1137,7 @@ mod tests {
               "hook_event_name": "PreToolUse",
               "session_id": "sess-1",
               "agent": "codex",
-              "cwd": "{project_str}",
+              "cwd": "{project_json}",
               "task_id": "02-27-user-login",
               "tool_name": "Bash",
               "command": "cargo test",

@@ -221,12 +221,13 @@ fn scan_sessions(project_dir: &Path) -> std::collections::HashMap<String, Vec<Se
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default();
-            // current_task 形如 ".trellis/tasks/<dir>"
+            // current_task 形如 ".trellis/tasks/<dir>"（Windows 可能是反斜杠，先归一化）
             let task_dir = raw
                 .current_task
                 .as_deref()
-                .and_then(|p| p.rsplit('/').next())
-                .unwrap_or("");
+                .map(crate::platform::to_posix)
+                .and_then(|p| p.rsplit('/').next().map(str::to_owned))
+                .unwrap_or_default();
             if !task_dir.is_empty() && !raw.last_seen_at.is_empty() {
                 map.entry(task_dir.to_string())
                     .or_default()
@@ -513,7 +514,8 @@ pub fn project_info(project_dir: &Path) -> ProjectInfo {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default(),
-        path: project_dir.to_string_lossy().into_owned(),
+        /* Windows canonicalize 会带 \\?\ 设备路径前缀，去掉它再展示 */
+        path: crate::platform::strip_device_prefix(&project_dir.to_string_lossy()),
         task_count: tasks.len(),
         last_activity: if last > 0 {
             chrono::DateTime::from_timestamp_millis(last).map(|t| t.to_rfc3339())

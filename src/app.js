@@ -235,7 +235,8 @@ function projectNameForPath(path) {
   if (!path) return null;
   const project = state.projects.find((item) => item.path === path || item.name === path);
   if (project) return project.name;
-  const parts = String(path).replace(/\/+$/, '').split('/');
+  // Windows 路径用反斜杠，统一按 / 和 \ 切取最后一段（兼容跨平台）
+  const parts = String(path).replace(/[/\\]+$/, '').split(/[/\\]+/);
   return parts[parts.length - 1] || null;
 }
 /* 由 '项目::任务id' 解析出任务标题（供播报/展示用，避免用内部 key） */
@@ -1043,7 +1044,8 @@ function observeTimelineFor(rt, t) {
 function renderProjectActivityCard(activity) {
   const card = $('card'), main = $('main'), grid = $('grid');
   const displayState = displayStateForActivity(activity);
-  const project = activity.project.split('/').filter(Boolean).pop() || activity.project;
+  /* Windows 路径（\\?\C:\... 或 C:\...）用 \ 分隔，统一按 / 和 \ 切取末段目录名 */
+  const project = String(activity.project || '').replace(/[\\/]+$/, '').split(/[\\/]+/).filter(Boolean).pop() || activity.project;
   const agent = activity.agentKind || 'agent';
   const semanticActivity = displayActivity(
     activity.activity,
@@ -1083,12 +1085,12 @@ function renderProjectActivityCard(activity) {
         <span class="runtime-phase">项目级 · 未绑定 Trellis task</span>
         <span class="runtime-progress">实时</span>
       </div>
-      <div class="meta rule"><span class="chip br">${esc(activity.project)}</span></div>
+      <div class="meta rule"><span class="chip br">${esc(project)}</span></div>
       <div class="stage"><div class="stage-fill">
         <div class="quote-label">会话来源</div>
         <div class="proj-context">
           <div class="pc-row"><span class="pc-key">Agent</span><span class="pc-val">${esc(agent)}</span></div>
-          <div class="pc-row"><span class="pc-key">路径</span><span class="pc-val">${esc(activity.project)}</span></div>
+          <div class="pc-row"><span class="pc-key">路径</span><span class="pc-val">${esc(project)}</span></div>
           <div class="pc-row"><span class="pc-key">最近活动</span><span class="pc-val">${esc(semanticActivity || '会话正在运行')}</span></div>
           <div class="pc-row"><span class="pc-key">更新</span><span class="pc-val">${esc(relTime(updatedAt)) || '—'}</span></div>
         </div>
@@ -1253,16 +1255,18 @@ function renderCard(t, projectActivity) {
 /* ---------- 翻面 ---------- */
 /* 高度自适应只在正面生效；翻面必须移除 fit，否则 .face.back 被 display:none */
 function syncFit() {
-  /* Sheet 是卡片内的底部覆层。fit 模式下 world 高度为 auto，百分比 max-height
-     无法稳定解析，且延迟 resize 会让 macOS 重算窗口位置；打开覆层时保持当前窗口几何。 */
-  const fit = state.mode === 'card' && !state.flipped && !state.treeOpen && !state.adminOpen;
+  /* fit 模式下 world 高度为 auto，让窗口跟随内容高度。
+     设置面板（adminOpen）也参与自适应：内容高于当前窗口时拉伸窗口，
+     而不是在固定窗口内内部滚动。翻面 / 任务树仍保持固定窗口几何。 */
+  const fit = state.mode === 'card' && !state.flipped && !state.treeOpen;
   document.body.classList.toggle('fit', fit);
   scheduleWindowFit();
 }
 /* 渲染稳定后一次性把窗口高度对齐到内容高度：防抖 + 阈值，避免连续 set_size 打死 WKWebView */
 let fitWinTimer = null;
+const IDLE_WINDOW_HEIGHT = 400;
 function scheduleWindowFit() {
-  if (state.mode !== 'card' || state.view !== 'main' || state.treeOpen || state.adminOpen) {
+  if (state.mode !== 'card' || state.view !== 'main' || state.treeOpen) {
     clearTimeout(fitWinTimer);
     fitWinTimer = null;
     return;
@@ -1289,13 +1293,30 @@ function scheduleWindowFit() {
       content += Math.max(0, kids - 1) * 8; /* .b-pane gap */
       /* 详情页限高：屏幕可用高度的 80% */
       h = Math.min(Math.ceil(backTop + content) + 4, Math.floor(screen.availHeight * 0.8));
+    } else if (state.adminOpen) {
+      /* 设置面板：窗口拉伸到覆盖 admin 全部内容，避免内部滚动截断。 */
+      const admin = $('admin');
+      const body = $('adminBody');
+      if (!admin || !body) { world.style.maxHeight = ''; return; }
+      const header = admin.querySelector('.list-h');
+      const headerHeight = header ? header.getBoundingClientRect().height : 0;
+      const panelHeight = Math.max(admin.getBoundingClientRect().height, headerHeight + body.scrollHeight);
+      h = Math.min(
+        Math.max(IDLE_WINDOW_HEIGHT, Math.ceil(panelHeight) + 4),
+        Math.floor(screen.availHeight * 0.92),
+      );
     } else {
       const bottom = card.getBoundingClientRect().bottom;
       h = Math.ceil(bottom - world.getBoundingClientRect().top) + 4; /* 舞台无 padding，只留边框取整余量 */
+      /* 空闲页不随占位文案压缩：保持标准卡片窗口高度，菜单等绝对定位浮层
+         才有稳定的可用空间。 */
+      if (card.dataset.kind === 'idle') h = Math.max(h, IDLE_WINDOW_HEIGHT);
     }
     world.style.maxHeight = '';
     if (Math.abs(h - window.innerHeight) > 40) {
-      call('fit_window_height', { height: h }).catch(() => {});
+      call('fit_window_height', { height: h }).catch((error) => {
+        console.error('[fit_window_height]', error);
+      });
     }
   }, 500);
 }
@@ -1846,7 +1867,7 @@ function renderCapsule(t, projectActivity) {
   } else if (projectActivity) {
     displayState = displayStateForActivity(projectActivity);
     kind = capsuleKindFor(displayState, 'work');
-    const project = projectActivity.project.split('/').filter(Boolean).pop() || projectActivity.project;
+    const project = String(projectActivity.project || '').replace(/[\\/]+$/, '').split(/[\\/]+/).filter(Boolean).pop() || projectActivity.project;
     projectName = projectNameForPath(projectActivity.project) || project;
     title = `${project} · ${projectActivity.agentKind || 'agent'}`;
     semanticActivity = displayActivity(
@@ -2156,8 +2177,12 @@ async function toggleHook(agent) {
 }
 function renderAdmin() {
   const panel = $('admin');
+  document.body.classList.toggle('admin-open', !!state.adminOpen);
   panel.classList.toggle('open', !!state.adminOpen);
-  if (!state.adminOpen) return;
+  if (!state.adminOpen) {
+    scheduleWindowFit();
+    return;
+  }
   if (!state.hookStatusRequested && !state.hookStatusLoading) refreshHookStatuses();
   const body = $('adminBody');
   body.innerHTML = '';
@@ -2194,10 +2219,11 @@ function renderAdmin() {
     row.innerHTML = `
       <div class="adm-info">
         <div class="adm-name">${esc(p.name)}<span class="adm-count">${p.taskCount ?? 0} 任务</span></div>
-        <div class="adm-path">${esc(p.path)}</div>
+        <div class="adm-path">${esc(projectNameForPath(p.path) || p.path)}</div>
       </div>`;
     body.appendChild(row);
   }
+  setTimeout(scheduleWindowFit, 650);
 }
 function secTitle(text) {
   const d = document.createElement('div');
@@ -2682,6 +2708,7 @@ function toggleMenu(force) {
     state.menuOpen = false;
     syncMenuChrome();
     restoreFocus();
+    scheduleWindowFit();
   }
 }
 

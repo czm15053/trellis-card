@@ -335,18 +335,22 @@ body.fit .flip{flex:1;min-height:0}
 body.fit .flip-inner{position:relative;inset:auto;transform:none;height:100%}
 body.fit .face{position:relative;inset:auto;transform:none;visibility:visible;height:100%}
 body.fit .face.back{display:none}
+/* 空闲态保持标准卡片几何；否则 fit 模式会只按占位文案收缩 card，
+   即使原生窗口已扩高也只会留下透明空白。 */
+body.fit .card[data-kind="idle"]{flex:0 0 400px;min-height:400px}
+/* 设置覆盖层的高度以当前原生窗口为准，而非空闲卡片的 400px 最小高度。 */
+body.fit.admin-open .world{height:100vh;max-height:none}
+body.fit.admin-open .card,body.fit.admin-open .card[data-kind="idle"]{flex:1;min-height:0}
 
 /* ---------- 主卡片：弹性主区 ---------- */
 .card{
   flex:1;min-height:0;width:100%;
   position:relative;border-radius:var(--radius);
-  /* overflow:clip 禁滚动容器：card 内容（.foot 负 margin 等）天然比 clientWidth 宽，
-     hidden 会让浏览器在聚焦 sheet 控件时 autoscroll（scrollLeft=38）导致整体左移裁切。
-     clip 与 hidden 视觉等价但不产生滚动容器，scrollLeft 恒 0。老引擎 fallback 到 hidden。 */
-  overflow:hidden;overflow:clip;
+  /* 圆角及子项裁剪使用兼容性稳定的 hidden；noise SVG 未作为背景使用，避免
+     WebView2 将该图层按矩形绘制。 */
+  overflow:hidden;
   border:1px solid var(--line2);
   background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='.05'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E"),
     linear-gradient(155deg,rgba(255,255,255,.05),transparent 42%),
     linear-gradient(180deg,#141824 0%,#0e1119 52%,#0a0c12 100%);
   box-shadow:
@@ -682,6 +686,11 @@ body.fit .face.back{display:none}
   transition:transform .44s var(--ease),opacity .3s;
 }
 .sheet.settings{max-height:66%}
+/* 设置是覆盖层，不参与卡片高度累加；窗口尺寸由其自身内容高度决定。 */
+body.fit .sheet.settings{position:absolute;bottom:0;max-height:100%;height:auto}
+body.fit .sheet.settings #adminBody{overflow:auto;flex:1 1 auto;min-height:0}
+/* 关闭时直接移除设置 sheet，避免 transform 在高度变化时留下残片。 */
+body.fit .sheet.settings:not(.open){display:none}
 .sheet.open{transform:none;opacity:1;pointer-events:auto}
 .sheet::before{content:"";position:absolute;top:7px;left:50%;transform:translateX(-50%);width:30px;height:3px;border-radius:99px;background:var(--line2)}
 .list-h{flex-shrink:0;padding:12px 14px 5px;font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);display:flex;justify-content:space-between;align-items:center}

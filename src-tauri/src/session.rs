@@ -87,11 +87,26 @@ impl SessionRegistry {
 
     pub fn apply(&mut self, event: HookEvent) -> bool {
         let state = event.event_name.to_ascii_lowercase();
+        let terminal = state == "stop"
+            || state == "sessionend"
+            || state == "session_end"
+            || state.ends_with(".idle")
+            || state.ends_with("_idle")
+            || state.ends_with("idle")
+            || state.ends_with(".completed")
+            || state.ends_with("_completed")
+            || state.ends_with("completed")
+            || state.ends_with(".done")
+            || state.ends_with("_done")
+            || state.ends_with("done")
+            || state.ends_with(".ended")
+            || state.ends_with("_ended")
+            || state.ends_with("ended");
         let (agent_state, waiting_reason) = if state.contains("permission") {
             (AgentState::Waiting, Some(WaitingReason::Permission))
         } else if state.contains("question") || state.contains("askuser") {
             (AgentState::Waiting, Some(WaitingReason::Question))
-        } else if state == "stop" || state == "sessionend" || state == "session_end" {
+        } else if terminal {
             (AgentState::Done, None)
         } else if state == "sessionstart" || state == "session_start" {
             (AgentState::None, None)
@@ -208,6 +223,16 @@ mod tests {
             registry.get("s1").unwrap().task_id.as_deref(),
             Some("07-demo")
         );
+    }
+
+    #[test]
+    fn opencode_idle_event_marks_agent_done() {
+        let mut registry = SessionRegistry::new();
+        registry.apply(HookEvent::working("s1", "/repo", Some("07-demo"), 10));
+        let mut event = HookEvent::stop("s1", "/repo", Some("07-demo"), 20);
+        event.event_name = "session.idle".into();
+        registry.apply(event);
+        assert_eq!(registry.get("s1").unwrap().state, AgentState::Done);
     }
 
     #[test]
