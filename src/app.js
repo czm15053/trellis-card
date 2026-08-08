@@ -39,6 +39,7 @@ const KIND_COLOR = { plan: '#8b7cf6', work: '#f0a35e', wrap: '#ff8f5a', done: '#
 const HOOK_AGENTS = Object.freeze([
   { id: 'codex', label: 'Codex', description: '采集 Codex 会话中的任务和工具活动', configPath: '~/.codex/hooks.json' },
   { id: 'claude', label: 'Claude Code', description: '采集 Claude Code 会话中的任务和工具活动', configPath: '~/.claude/settings.json' },
+  { id: 'cursor', label: 'Cursor', description: '采集 Cursor 会话中的任务和工具活动', configPath: '~/.cursor/hooks.json' },
 ]);
 /* star 色点取项目内「最紧急」kind：卡住 > 收束 > 动手 > 规划 */
 const KIND_URGENCY = { halt: 0, wrap: 1, work: 2, plan: 3, done: 4 };

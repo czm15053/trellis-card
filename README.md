@@ -83,8 +83,10 @@ Hook 只需安装一次，即可观察多个项目。若已进入主界面，可
 
 1. 点击卡片右上角的三横线，打开「观察菜单」。
 2. 在「配置」区域点击「设置」。
-3. 在「Agent 接入」中选择 `Codex` 或 `Claude Code`，点击「安装」。
+3. 在「Agent 接入」中选择 `Codex`、`Claude Code` 或 `Cursor`，点击「安装」。
 4. 重启对应 Agent；此后它在 Trellis 项目中的活动会自动出现在卡片中。
+
+> 说明：Cursor 的 hook 是纯观察者，只采集 `sessionStart` / `preToolUse` / `beforeShellExecution` / `stop` / `sessionEnd` 事件，不参与权限决策，也不会阻断或修改命令。由于 Cursor 不暴露「等待授权」事件，卡片上 Cursor 会话以「运行中 / 空闲 / 一轮完成」为主。
 
 「设置」会显示 Hook 是否已安装；需要停止接入时，点击同一位置的「移除」即可。应用只管理自身写入的 Hook，不会改动其他配置。
 
