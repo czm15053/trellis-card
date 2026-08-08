@@ -41,13 +41,13 @@
 
   <!-- 主界面 -->
   <div class="main-view" id="mainView" hidden>
-    <!-- 胶囊：固定 360×136 分区面板（拖动 / 内容回卡片 / 菜单 分离） -->
-    <div class="capsule" id="capsule" hidden data-kind="idle">
+    <!-- 胶囊：透明窗口中的灵动岛表面（拖动 / 内容回卡片 / 菜单分离） -->
+    <div class="capsule" id="capsule" hidden data-kind="idle" role="group" aria-label="Trellis Card 灵动岛">
       <div class="cap-top">
         <div class="cap-drag" data-tauri-drag-region title="拖动移动窗口"></div>
         <button type="button" class="cap-menu-btn" id="btnCapMenu" title="胶囊菜单" aria-label="打开胶囊菜单" aria-expanded="false" aria-controls="capMenuPop"><svg class="lucide" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-more-horizontal"/></svg></button>
       </div>
-      <div class="cap-body" id="capBody" title="点击回到卡片">
+      <div class="cap-body" id="capBody" role="button" tabindex="0" aria-label="打开完整任务卡片" title="点击回到卡片">
         <div class="cap-status">
           <span class="orb" id="capOrb"></span>
           <span class="cap-state" id="capState">空闲</span>

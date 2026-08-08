@@ -717,11 +717,33 @@ fn set_always_on_top(app: AppHandle, state: State<AppState>, flag: bool) -> Resu
 fn set_window_mode(app: AppHandle, mode: String) -> Result<(), String> {
     let window = app.get_webview_window("main").ok_or("窗口不存在")?;
     let position = window.outer_position().ok();
-    let (w, h) = if mode == "capsule" {
-        (360.0, 136.0)
+    let (w, h) = window_mode_size(&mode);
+    window
+        .set_size(tauri::LogicalSize::new(w, h))
+        .map_err(|e| e.to_string())?;
+    if let Some(position) = position {
+        window.set_position(position).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn window_mode_size(mode: &str) -> (f64, f64) {
+    if mode == "capsule" {
+        capsule_window_size(false)
     } else {
         (380.0, 640.0)
-    };
+    }
+}
+
+fn capsule_window_size(expanded: bool) -> (f64, f64) {
+    (360.0, if expanded { 136.0 } else { 62.0 })
+}
+
+#[tauri::command]
+fn set_capsule_expanded(app: AppHandle, expanded: bool) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or("窗口不存在")?;
+    let position = window.outer_position().ok();
+    let (w, h) = capsule_window_size(expanded);
     window
         .set_size(tauri::LogicalSize::new(w, h))
         .map_err(|e| e.to_string())?;
@@ -840,6 +862,7 @@ pub fn run() {
             archive_task,
             set_always_on_top,
             set_window_mode,
+            set_capsule_expanded,
             fit_window_height,
             hide_window,
             get_runtime_snapshot,
@@ -885,6 +908,14 @@ mod tests {
     #[test]
     fn collect_docs_empty_dir() {
         assert!(collect_docs(Path::new("/nonexistent")).is_empty());
+    }
+
+    #[test]
+    fn capsule_window_uses_compact_and_expanded_heights() {
+        assert_eq!(window_mode_size("capsule"), (360.0, 62.0));
+        assert_eq!(capsule_window_size(false), (360.0, 62.0));
+        assert_eq!(capsule_window_size(true), (360.0, 136.0));
+        assert_eq!(window_mode_size("card"), (380.0, 640.0));
     }
 
     #[test]

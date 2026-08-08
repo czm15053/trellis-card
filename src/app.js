@@ -1832,8 +1832,24 @@ function toggleAutoFollow() {
   render();
 }
 
-/* ---------- 胶囊：固定 360×136 三层信息 + 分区交互 ---------- */
+/* ---------- 胶囊：灵动岛紧凑态 + 展开态 ---------- */
 let lastCapRuntimeState = null;
+let lastCapsuleWindowExpanded = null;
+let capsuleWindowResizeChain = Promise.resolve();
+let modeTransitioning = false;
+function syncCapsuleWindow() {
+  if (!hasTauri || state.mode !== 'capsule' || modeTransitioning) return;
+  const cap = $('capsule');
+  const expanded = !!cap && (cap.classList.contains('is-expanded') || cap.classList.contains('menu-open'));
+  if (expanded === lastCapsuleWindowExpanded) return;
+  lastCapsuleWindowExpanded = expanded;
+  capsuleWindowResizeChain = capsuleWindowResizeChain
+    .then(() => call('set_capsule_expanded', { expanded }))
+    .catch((e) => {
+      lastCapsuleWindowExpanded = null;
+      report('set_capsule_expanded', e);
+    });
+}
 function capsuleKindFor(displayState, taskKind) {
   if (displayState === 'failed' || displayState === 'blocked') return 'halt';
   if (displayState === 'waiting_permission' || displayState === 'waiting_question') return 'wrap';
@@ -1850,6 +1866,8 @@ function renderCapsule(t, projectActivity) {
   cap.hidden = !show;
   cap.classList.toggle('show', show);
   if (!show) {
+    cap.classList.remove('is-expanded', 'menu-open');
+    lastCapsuleWindowExpanded = null;
     const pop = $('capMenuPop');
     if (pop) pop.hidden = true;
     const btn = $('btnCapMenu');
@@ -2058,6 +2076,9 @@ function toggleCapMenu(force) {
   if (!pop || !btn) return;
   const target = force !== undefined ? force : pop.hidden;
   pop.hidden = !target;
+  const cap = $('capsule');
+  if (cap) cap.classList.toggle('menu-open', target);
+  syncCapsuleWindow();
   btn.classList.toggle('on', target);
   btn.setAttribute('aria-expanded', String(target));
   if (target) {
@@ -2071,23 +2092,18 @@ function toggleCapMenu(force) {
 }
 async function openUnreadFromCapsule() {
   /* badge：回卡片查看证据，不改 focus/锁定。切换失败时保留未读。 */
-  if (state.mode === 'capsule') {
-    try {
-      await call('set_window_mode', { mode: 'card' });
-    } catch (e) {
-      report('set_window_mode', e);
-      return false;
-    }
-    state.mode = 'card';
-    render();
-  }
+  if (state.mode === 'capsule' && !(await setMode('card'))) return false;
   return openUnreadActivity();
 }
 async function setMode(mode) {
-  if (state.mode === mode) return;
+  if (state.mode === mode) return true;
+  if (modeTransitioning) return false;
+  modeTransitioning = true;
   try {
+    await capsuleWindowResizeChain;
     await call('set_window_mode', { mode });
     state.mode = mode;
+    lastCapsuleWindowExpanded = null;
     if (mode === 'capsule') {
       state.themeOpen = false;
       state.menuOpen = false;
@@ -2098,8 +2114,12 @@ async function setMode(mode) {
       toggleCapMenu(false);
     }
     render();
+    return true;
   } catch (e) {
     report('set_window_mode', e);
+    return false;
+  } finally {
+    modeTransitioning = false;
   }
 }
 
@@ -2820,9 +2840,37 @@ function bindUI() {
   /* 胶囊分区交互：内容回卡片 / 菜单 / 未读 badge，拖动区无 click */
   const capBody = $('capBody');
   if (capBody) {
+    const cap = $('capsule');
+    if (cap) {
+      const expand = () => {
+        cap.classList.add('is-expanded');
+        syncCapsuleWindow();
+      };
+      const collapseIfOutside = (e) => {
+        if (e.relatedTarget && cap.contains(e.relatedTarget)) return;
+        cap.classList.remove('is-expanded');
+        syncCapsuleWindow();
+      };
+      cap.addEventListener('pointerover', expand);
+      cap.addEventListener('pointerout', collapseIfOutside);
+      cap.addEventListener('focusin', expand);
+      cap.addEventListener('focusout', (e) => {
+        requestAnimationFrame(() => {
+          if (!cap.contains(document.activeElement) && !(e.relatedTarget && cap.contains(e.relatedTarget))) {
+            cap.classList.remove('is-expanded');
+            syncCapsuleWindow();
+          }
+        });
+      });
+    }
     capBody.onclick = (e) => {
       if (e.target.closest('#capBadge, .cap-badge')) return;
       toggleCapMenu(false);
+      setMode('card');
+    };
+    capBody.onkeydown = (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
       setMode('card');
     };
   }
