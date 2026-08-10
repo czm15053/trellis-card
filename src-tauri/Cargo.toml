@@ -1,6 +1,6 @@
 [package]
 name = "trellis-card"
-version = "0.1.3"
+version = "0.1.4"
 description = "Read-only desktop observer for Trellis tasks and Agent activity"
 edition = "2021"
 
