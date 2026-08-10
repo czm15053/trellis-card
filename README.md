@@ -2,7 +2,7 @@
 
 > 常驻桌面的 Trellis 任务与 Agent 活动观察者。
 
-Trellis Card 是一款 macOS 桌面端小工具，以「卡片」和「胶囊」两种形态实时展示 Trellis 项目中的任务进度与 Agent 活动。它不修改任务，只负责让你一眼看清当前在发生什么。
+Trellis Card 是一款 macOS / Windows / Linux 桌面端小工具，以「卡片」和「胶囊」两种形态实时展示 Trellis 项目中的任务进度与 Agent 活动。它不修改任务，只负责让你一眼看清当前在发生什么。
 
 ![](./docs/screenshots/01-card-running.png)
 
@@ -55,7 +55,15 @@ Trellis Card 把任务的生命周期压缩成四种可感知的状态：
 
 ### 直接下载使用
 
-在 [Releases](../../releases) 页面下载最新 `.dmg`，拖拽安装后即可运行。
+在 [Releases](../../releases) 页面按平台下载对应安装包：
+
+- **macOS**：下载 `.dmg`，拖拽安装后即可运行。
+- **Windows**：下载 `.exe` 安装程序或 `.msi`，双击安装。
+- **Linux / Ubuntu**：下载 `.deb`（`sudo dpkg -i Trellis-Card_*.deb`）或 `.AppImage`（`chmod +x` 后直接运行）。首次运行前需安装系统依赖：
+
+  ```bash
+  sudo apt install libwebkit2gtk-4.1-0 libayatana-appindicator3-1 librsvg2-common
+  ```
 
 ### 开发运行
 
