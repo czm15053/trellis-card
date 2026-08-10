@@ -249,11 +249,13 @@ function taskTitleFor(focusKey) {
   const t = findTaskByKey(focusKey);
   return t ? (t.title || t.id) : null;
 }
-/* 由任务 key 查找任务对象（含 .project/.projectPath 标注） */
+/* 由任务 key 查找任务对象（含 .project/.projectPath 标注）。
+   同时查活跃与已懒加载的归档任务：归档任务可被点击聚焦/恢复持久化焦点，
+   不能只查 bucket.tasks。 */
 function findTaskByKey(focusKey) {
   if (!focusKey) return null;
   for (const bucket of Object.values(state.tasksByProject)) {
-    const task = (bucket.tasks || []).find(t => keyOf(t) === focusKey);
+    const task = bucketAllTasks(bucket).find(t => keyOf(t) === focusKey);
     if (task) return task;
   }
   return null;
@@ -450,12 +452,16 @@ function applyRuntimeSnapshot(snapshot) {
     const key = runtimeKeyFromView(view);
     if (key) next.set(key, view);
   }
-  /* 完成态自动推进需要「之前」的 displayState：快照整体替换前先记住当前 focus 任务的旧态 */
+  /* 快照整体替换前先记录旧状态，用于判定「是否有语义变化」（决定是否触发重渲染）。
+     runtime 数据可能在轮询/事件中重复到达，无变化时不应再触发 render。 */
+  const prevRuntimeKey = runtimeFingerprint(state.runtimeByTask, state.runtimeActivities);
   const prevFocusKey = state.focusKey;
   const prevFocusView = prevFocusKey ? state.runtimeByTask.get(prevFocusKey) : null;
   const prevFocusState = (prevFocusView && prevFocusView.displayState) || null;
   state.runtimeByTask = next;
   state.runtimeActivities = (snapshot && snapshot.projectActivities) || [];
+  const runtimeKey = runtimeFingerprint(next, state.runtimeActivities);
+  const runtimeChanged = runtimeKey !== prevRuntimeKey;
   const previousRuntimeFocusKey = state.runtimeFocusKey;
   /* focus-task-changed 事件可能漏收；从任务级 Agent 会话补齐焦点。 */
   const liveTaskFocus = [...next.entries()]
@@ -598,12 +604,43 @@ function applyRuntimeSnapshot(snapshot) {
       }
     }
   }
+  return runtimeChanged;
+}
+/* runtime 数据语义指纹：用于判断快照是否实际变化（无变化不触发重渲染）。
+    对每个任务的完整 UI 投影求值（含 agent 的 eventName/toolInput/waitingReason/activity/
+   updatedAt），加上排序后的 projectActivities。前端 displayActivity/displayStateForActivity
+   读取 agent.eventName + toolInput + waitingReason，这些字段变化必须触发 re-render。 */
+function runtimeFingerprint(byTask, activities) {
+  const tasks = [...byTask.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([k, v]) => {
+      const a = v && v.agent;
+      return [
+        k,
+        v && v.displayState,
+        v && v.phase,
+        v && v.action,
+        v && v.activity,
+        v && v.lastChangedAt,
+        a && a.state,
+        a && a.agentKind,
+        a && a.eventName,
+        a && a.toolName,
+        a && JSON.stringify(a.toolInput || null),
+        a && a.waitingReason,
+        a && a.activity,
+        a && a.updatedAt,
+      ].join(':');
+    });
+  /* projectActivities 来自后端 HashMap，顺序不稳定：完整序列化后排序，保证无变化时指纹稳定 */
+  const acts = (activities || []).map(a => JSON.stringify(a)).sort();
+  return `${acts.join(',')}|${tasks.join(',')}`;
 }
 async function refreshRuntimeSnapshot() {
   try {
     const snapshot = await call('get_runtime_snapshot');
-    applyRuntimeSnapshot(snapshot || {});
-    return true;
+    /* 返回「是否实际变化」：无变化时调用方不应因 runtime 触发重渲染。 */
+    return applyRuntimeSnapshot(snapshot || {});
   } catch (e) {
     /* runtime 快照不可用时降级到文件扫描，不阻塞主流程。 */
     if (hasTauri) console.error('[invoke:get_runtime_snapshot]', e);
@@ -674,6 +711,10 @@ function ensureFocusValid() {
 }
 /* 树列表：未完成全保留；已完成默认只留 mtime 最近 3 个。
    勾选「显示已归档」时，全部已归档任务（t.archived）追加显示，普通已完成仍只留最近 3 个。 */
+/* bucket 全部任务：活跃 + 已懒加载的归档。归档任务用 t.archived 区分，不参与活跃池。 */
+function bucketAllTasks(bucket) {
+  return (bucket.tasks || []).concat(bucket.archivedTasks || []);
+}
 function trimCompleted(tasks, showArchived) {
   const active = tasks.filter(t => !t.archived && unfinished(t));
   const done = tasks.filter(t => !unfinished(t) && !t.archived)
@@ -714,8 +755,11 @@ function buildTree(tasks) {
   return { top, kids };
 }
 
-/* ---------- 数据刷新 ---------- */
-async function refresh(force = false) {
+/* ---------- 数据刷新 ----------
+   includeRuntime：是否主动拉取 get_runtime_snapshot。事件路径（watcher/hook/task-completed）
+   由后端 emit agent-state-changed 推送 runtime，再主动拉会与后端 250ms coordinator 的
+   flush 形成同一次变更的双全量扫描，必须设为 false；启动/恢复/用户操作才拉一次完整快照。 */
+async function refresh(force = false, includeRuntime = true) {
   let projects;
   try {
     projects = await call('list_projects');
@@ -736,13 +780,16 @@ async function refresh(force = false) {
       continue;
     }
     const old = state.tasksByProject[p.name];
-    /* version 未变则跳过该项目的重渲染 */
+    /* version 未变则跳过该项目的重渲染；已懒加载的归档任务（archivedTasks）保留，
+       不被活跃任务刷新覆盖（活跃/归档 version 分离，archive mtime 不污染活跃 version）。 */
     if (!old || old.version !== res.version) {
       changed = true;
       state.tasksByProject[p.name] = {
         version: res.version,
+        archivedVersion: old && old.archivedVersion,
         errors: res.errors || [],
         tasks: (res.tasks || []).map(t => ({ ...t, project: p.name, projectPath: p.path })),
+        archivedTasks: (old && old.archivedTasks) || [],
       };
     }
   }
@@ -750,13 +797,117 @@ async function refresh(force = false) {
     if (!seen.has(n)) { delete state.tasksByProject[n]; changed = true; }
   }
   if (state.filter && !state.projects.some(p => p.name === state.filter)) state.filter = null;
-  const runtimeChanged = await refreshRuntimeSnapshot();
-  changed = changed || runtimeChanged;
+  /* runtime 数据由后端事件（agent-state-changed / focus-task-changed）或 10s reconcile 推送。
+     - force=false（poll 兜底）：不拉，避免每 5s 触发全量 scan；
+     - force=true 且 includeRuntime=true（启动/恢复/用户操作）：拉一次完整快照；
+     - force=true 且 includeRuntime=false（事件路径）：后端已 emit agent-state-changed，
+       不主动拉，避免与后端 250ms coordinator 的 flush 形成同一次变更的双全量扫描。 */
+  if (force && includeRuntime) {
+    const runtimeChanged = await refreshRuntimeSnapshot();
+    changed = changed || runtimeChanged;
+  }
   ensureFocusValid();
   updateStatus();
   if (changed && state.view === 'main') render();
   return changed;
 }
+
+/* ---------- RefreshCoordinator：事件触发的全量刷新统一入口 ----------
+   watcher 双事件（tasks-changed + runtime-reconciliation-needed）、hook 风暴、
+   task-completed 都可能短时间内连续到达。每次刷新都是全项目扫描，必须合并。
+   - 单飞（leading）：窗口内只启动一个批次；
+   - 串行：同一时刻至多一个刷新在飞，其余排队；
+   - 合批：合并「数据意图」——urgent 取或（hook 新建任务的 reveal 不被 watcher 覆盖）、
+     project 冲突取空（多项目事件不偏向 reveal 某一个），统一调 onTasksChanged。
+   纯刷新类（task-completed / visibilitychange）经 pureRefresh=true 走 refresh(true)，
+   不触发 reveal/new-task（完成迁移语义）。每批结束只 render 一次。
+   用户操作（manualRefresh / archiveTreeTask / addRoot / removeRoot）保持直接
+   await refresh()，低频且需同步返回值，不经此协调器。 */
+const RefreshCoordinator = {
+  inFlight: false,
+  queued: null,          // { urgent, project, pureRefresh }
+  DEBOUNCE_MS: 80,       // 事件合并窗口：80ms 内到达的事件合并为一个批次
+
+  request({ urgent = false, project = null, pureRefresh = false, includeRuntime = false } = {}) {
+    const prev = this.queued;
+    /* 一旦批次内出现多项目冲突，持久置 conflicted：本批次 project 恒为 null，
+       后续到达的项目不再重新选中（避免第三个项目把 null 覆盖回某项目）。 */
+    const conflict = (prev && prev.conflicted)
+      || Boolean((prev && prev.project) && project && (prev.project !== project));
+    this.queued = {
+      urgent: (prev && prev.urgent) || urgent,
+      project: conflict ? null : (project || (prev && prev.project)),
+      hasReveal: (prev && prev.hasReveal) || urgent || Boolean(project),
+      pureRefresh: (prev && prev.pureRefresh) || pureRefresh,
+      includeRuntime: (prev && prev.includeRuntime) || includeRuntime,
+      conflicted: conflict,
+    };
+    clearTimeout(this._t);
+    this._t = setTimeout(() => this._start(), this.DEBOUNCE_MS);
+  },
+
+  _start() {
+    if (this.inFlight || !this.queued) return;
+    const q = this.queued;
+    this.queued = null;
+    this.inFlight = true;
+    /* 有 reveal 意图（urgent 或 project 任一）时走 onTasksChanged 保留 reveal/new-task
+       （事件路径，不拉 runtime，由后端 agent-state-changed 推送）；
+       否则 pureRefresh 走 refresh(true, includeRuntime)——
+       窗口恢复（includeRuntime=true）需拉完整快照，完成迁移（false）由事件驱动不拉。 */
+    const run = () => (q.hasReveal
+      ? onTasksChanged({ urgent: q.urgent, project: q.project })
+      : refresh(true, q.includeRuntime));
+    Promise.resolve()
+      .then(run)
+      .catch(e => console.error('[refresh-coordinator]', e))
+      .finally(() => {
+        this.inFlight = false;
+        if (this.queued) this._start();
+      });
+  },
+};
+/* 事件源统一走协调器：watcher 双事件、hook、task-completed 等。 */
+function requestRefresh(opts) {
+  RefreshCoordinator.request(opts);
+}
+
+/* ---------- 归档任务懒加载 ----------
+   常规轮询的 list_tasks 不再返回 archive/（后端已拆分）。归档任务仅当 UI 需要时
+   按项目补拉，合并回同一 bucket 的 archivedTasks，独立 archivedVersion 不与活跃
+   version 混算（避免懒加载归档后 version!== 误判项目变更触发多余 render）。 */
+/* 使某项目的归档缓存失效（清 archivedVersion 标记），下次 ensureArchived 会重拉。
+   归档/反归档等改变 archive/ 内容的操作后调用，避免已加载缓存停留在旧状态。 */
+function invalidateArchived(projectName) {
+  const bucket = state.tasksByProject[projectName];
+  if (!bucket || bucket.archivedVersion === undefined) return;
+  state.tasksByProject[projectName] = { ...bucket, archivedVersion: undefined };
+}
+async function ensureArchived(projectName) {
+  const p = state.projects.find(item => item.name === projectName);
+  if (!p) return;
+  const bucket = state.tasksByProject[projectName];
+  /* 已加载过则跳过；用 archivedVersion 标记「已拉取」（含无归档的项目，version 为空串也有效） */
+  if (bucket && bucket.archivedVersion !== undefined) return;
+  let res;
+  try {
+    res = await call('list_archived', { project: p.path });
+  } catch (e) {
+    report('list_archived', e);
+    return;
+  }
+  const prev = state.tasksByProject[projectName] || {};
+  state.tasksByProject[projectName] = {
+    ...prev,
+    archivedVersion: (res && res.version) || '',
+    archivedTasks: ((res && res.tasks) || []).map(t => ({ ...t, project: projectName, projectPath: p.path })),
+  };
+}
+async function ensureAllArchived() {
+  const names = state.filter ? [state.filter] : state.projects.map(p => p.name);
+  await Promise.all(names.map(n => ensureArchived(n)));
+}
+
 function updateStatus() {
   const errs = Object.values(state.tasksByProject).reduce((n, b) => n + (b.errors ? b.errors.length : 0), 0);
   const active = pool().filter(unfinished).length;
@@ -1356,12 +1507,42 @@ function scheduleWindowFit() {
     h = Math.max(160, Math.ceil(h));
     world.style.height = `${h}px`;
     world.style.maxHeight = `${h}px`;
-    if (Math.abs(h - window.innerHeight) > 40) {
-      call('fit_window_height', { height: h }).catch((error) => {
-        console.error('[fit_window_height]', error);
-      });
+    /* 死区 + in-flight/target 防回环：
+       - 死区 FIT_DEADZONE：内容高度微小波动（如摘要在换行）不触发 resize，避免 DWM 重排；
+       - in-flight：fit_window_height 在途时不重复发 IPC，记录最新目标，完成后再按需补发，
+         防止内容与窗口高度互相追赶形成回环。 */
+    const target = h;
+    fitPendingHeight = target;
+    if (Math.abs(target - window.innerHeight) <= FIT_DEADZONE) {
+      fitLastSent = target;   /* 目标已在死区内，视为已对齐 */
+      return;
     }
+    if (fitInFlight) {
+      /* 已在途：等待完成回调再处理最新目标 */
+      return;
+    }
+    sendFitWindow(target);
   }, 500);
+}
+/* fit 状态机：目标高度 / 在途标记 / 最近一次发送值 */
+let fitPendingHeight = 0;
+let fitInFlight = false;
+let fitLastSent = 0;
+const FIT_DEADZONE = 15;
+function sendFitWindow(h) {
+  fitLastSent = h;
+  fitInFlight = true;
+  call('fit_window_height', { height: h })
+    .catch((error) => console.error('[fit_window_height]', error))
+    .finally(() => {
+      fitInFlight = false;
+      /* 在途期间若目标又变了，补发一次（死区过滤已保证不会形成高频回环） */
+      if (fitPendingHeight !== 0 && Math.abs(fitPendingHeight - fitLastSent) > FIT_DEADZONE) {
+        sendFitWindow(fitPendingHeight);
+      } else {
+        fitPendingHeight = 0;
+      }
+    });
 }
 function applyFlipCard() {
   $('card').classList.toggle('flipped', state.flipped);
@@ -1591,7 +1772,8 @@ function renderTree(focused) {
   const names = state.filter ? [state.filter] : state.projects.map(p => p.name);
   for (const name of names) {
     const bucket = state.tasksByProject[name];
-    const shown = trimCompleted(bucket ? bucket.tasks : [], state.showArchived);
+    /* 归档懒加载后合并进树列表：活跃任务 + 已加载的归档任务 */
+    const shown = trimCompleted(bucket ? bucketAllTasks(bucket) : [], state.showArchived);
     if (!shown.length) continue;
 
     const projLi = document.createElement('li');
@@ -1743,7 +1925,11 @@ async function archiveTreeTask(task, btn) {
   try {
     await call('archive_task', { project: task.projectPath || task.project, task: task.dir || task.id });
     toast(`已归档：${task.title || task.id}`);
+    /* 归档改变了 archive/ 内容：失效该项目的归档缓存，下次 ensureArchived 重拉，
+       避免已加载的 archivedTasks 停留在旧状态（新归档任务消失）。 */
+    invalidateArchived(task.project);
     await refresh(true);
+    if (state.showArchived) await ensureArchived(task.project);
     if (state.view === 'main') render();
   } catch (e) {
     toast(`归档失败：${errMsg(e)}`);
@@ -2454,8 +2640,11 @@ function queueHookRefresh(payload, delay = 250) {
     const pending = hookRefreshPayload;
     hookRefreshPayload = null;
     if (!pending) return;
+    /* hook 风暴已有 250ms 合批；再经 RefreshCoordinator 合并数据意图
+       （urgent=true + project，reveal 语义经 onTasksChanged 保留），
+       与 watcher/task-completed 共用同一队列避免并发。 */
     hookRefreshChain = hookRefreshChain
-      .then(() => onTasksChanged({ urgent: true, project: pending.project }))
+      .then(() => requestRefresh({ urgent: true, project: pending.project }))
       .catch(e => console.error('[event:hook-tasks-changed]', e));
   }, delay);
 }
@@ -2491,6 +2680,8 @@ async function onTasksChanged({ urgent = false, project = null } = {}) {
       && state.filter !== projectName
       && state.focusMode !== 'manual',
   );
+  /* refresh(true) 内部已 render 一次；reveal/new-task 若改动 focus 状态，需再 render 一次展示。 */
+  let focusMutated = false;
   if (shouldRevealProject) {
     /* Trellis actions are explicit activity for the project being planned or
        created. Do not let a stale project filter hide that activity. */
@@ -2499,7 +2690,8 @@ async function onTasksChanged({ urgent = false, project = null } = {}) {
     state.runtimeFocusKey = null;
   }
   const before = new Set(pool().map(keyOf));
-  await refresh(true);
+  /* 事件路径：runtime 由后端 agent-state-changed 推送，不主动拉（避免双全量扫描） */
+  await refresh(true, false);
   if (shouldRevealProject) {
     /* Refresh has repopulated all projects. Keep the newly revealed project
        visible even when the runtime focus snapshot still points at an older
@@ -2514,6 +2706,7 @@ async function onTasksChanged({ urgent = false, project = null } = {}) {
       state.flipped = false;
       state.prdCache = null;
       state.docSel = null;
+      focusMutated = true;
     }
   }
   /* 对比刷新前后任务池，聚焦并提示新任务 */
@@ -2530,20 +2723,41 @@ async function onTasksChanged({ urgent = false, project = null } = {}) {
       state.flipped = false;
       state.prdCache = null;
       state.docSel = null;
+      focusMutated = true;
     }
     state.subOpen = null;
     toast(`新任务：${t.title || t.id}`);
     if (state.mode === 'capsule') await setMode('card');   /* 胶囊模式自动弹回 */
   }
-  render();
+  /* 事件变更可能含外部 task.py archive（不经前端 archive_task）：归档缓存需失效重拉，
+     否则显示归档时新归档任务停留在旧缓存。showArchived 开启时刷新受影响项目。 */
+  if (state.showArchived) {
+    if (projectName) {
+      invalidateArchived(projectName);
+      await ensureArchived(projectName);
+    } else {
+      /* 无 project hint（如 watcher 文件变更）：刷新所有已加载归档的项目 */
+      const loaded = Object.keys(state.tasksByProject)
+        .filter(n => state.tasksByProject[n] && state.tasksByProject[n].archivedVersion !== undefined);
+      for (const n of loaded) {
+        invalidateArchived(n);
+        await ensureArchived(n);
+      }
+    }
+  }
+  /* 仅当 reveal/new-task 或归档刷新实际改动了状态时补充 render；否则 refresh 内部已渲染。 */
+  if ((focusMutated || state.showArchived) && state.view === 'main') render();
 }
 function bindWatch() {
   if (!hasTauri || !window.__TAURI__.event) return;
+  /* watcher 一次变更同时发 tasks-changed + runtime-reconciliation-needed，二者都触发
+     全量刷新。统一经 RefreshCoordinator 合并数据意图（urgent 取或、project 冲突取空），
+     避免双重 refresh/render，同时不丢 hook 的 reveal/urgent 语义。 */
   window.__TAURI__.event.listen('tasks-changed', () => {
-    onTasksChanged().catch(e => console.error('[event:tasks-changed]', e));
+    requestRefresh({ urgent: false });
   });
   window.__TAURI__.event.listen('runtime-reconciliation-needed', () => {
-    refresh(true).catch(e => console.error('[event:runtime-reconciliation-needed]', e));
+    requestRefresh({ urgent: false });
   });
   window.__TAURI__.event.listen('hook-tasks-changed', (event) => {
     const payload = event && event.payload ? event.payload : {};
@@ -2554,13 +2768,17 @@ function bindWatch() {
     }
   });
   window.__TAURI__.event.listen('agent-state-changed', (event) => {
-    applyRuntimeSnapshot(event && event.payload ? event.payload : {});
-    if (state.view === 'main') render();
+    /* 后端已对快照做指纹判定，无变化不 emit；前端再用 runtimeChanged 兜底，
+       仅在实际变化时 render，避免事件风暴下重复渲染。 */
+    const changed = applyRuntimeSnapshot(event && event.payload ? event.payload : {});
+    if (changed && state.view === 'main') render();
   });
-  /* 完成迁移事件（后端 canonical 检测）：幂等消费——只触发一次刷新，
-     完成态推进由 applyRuntimeSnapshot 的 focus-policy 层处理，不重复未读/推进。 */
+  /* 完成迁移事件（后端 canonical 检测）：幂等消费——只触发一次纯刷新，
+     完成态推进由 applyRuntimeSnapshot 的 focus-policy 层处理，不重复未读/推进。
+     pureRefresh=true 且 includeRuntime=false：不触发 reveal/new-task，且 runtime 由
+     后端 agent-state-changed 已推送，不主动拉（避免双全量扫描）。 */
   window.__TAURI__.event.listen('task-completed', () => {
-    refresh(true).catch(e => console.error('[event:task-completed]', e));
+    requestRefresh({ pureRefresh: true, includeRuntime: false });
   });
   window.__TAURI__.event.listen('focus-task-changed', (event) => {
     const key = event && event.payload;
@@ -2759,13 +2977,14 @@ function bindUI() {
   $('btnAdmin').onclick = () => { toggleMenu(false); toggleAdmin(); };
   if ($('btnAdminClose')) $('btnAdminClose').onclick = () => closeAdmin();
   if ($('btnTreeClose')) $('btnTreeClose').onclick = () => closeTree();
-  /* 「显示已归档」勾选框：切换后立即重渲染任务树 */
+  /* 「显示已归档」勾选框：切换后懒加载各项目归档任务，再重渲染任务树 */
   const chkArchived = $('chkShowArchived');
   if (chkArchived) {
     chkArchived.checked = !!state.showArchived;
-    chkArchived.onchange = () => {
+    chkArchived.onchange = async () => {
       state.showArchived = chkArchived.checked;
       savePrefs();
+      if (chkArchived.checked) await ensureAllArchived();
       if (state.view === 'main') render();
     };
   }
@@ -2923,7 +3142,9 @@ function bindUI() {
   });
 
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && state.view === 'main') refresh(true);
+    /* 窗口恢复时强制刷新，经 coordinator 与可能同时到达的事件合并，避免并发全量扫描。
+       pureRefresh=true（纯数据同步不 reveal）+ includeRuntime=true（隐藏后回来需完整快照）。 */
+    if (!document.hidden && state.view === 'main') requestRefresh({ pureRefresh: true, includeRuntime: true });
   });
 }
 
@@ -2940,6 +3161,8 @@ function bindExcerptFit() {
      可避免卡片仍按 resize 前的视口高度布局，导致底部出现透明空白。 */
   window.addEventListener('resize', () => {
     if (state.view === 'main' && state.mode === 'card' && !state.treeOpen) {
+      /* 窗口实际尺寸已变，同步 fit 状态机基线，避免误判目标差。 */
+      fitLastSent = window.innerHeight;
       scheduleWindowFit();
     }
   });
@@ -2962,6 +3185,9 @@ async function boot() {
     state.alwaysOnTop = !!cfg.alwaysOnTop;   /* 后端为权威来源 */
     state.configured = !!cfg.configured;
   }
+  /* 事件订阅在首屏 refresh 前注册：消除「首屏 render 完成 → 订阅就绪」之间的
+     丢事件窗口期。bindWatch 只注册 listen，不依赖 refresh 结果或 main DOM。 */
+  bindWatch();
   if (state.configured) {
     state.view = 'main';
     $('setup').hidden = true;
@@ -2969,6 +3195,8 @@ async function boot() {
     /* 启动后强制对齐一次窗口模式，避免状态与窗口尺寸不一致 */
     if (hasTauri) call('set_window_mode', { mode: state.mode }).catch(() => {});
     await refresh(true);
+    /* 用户已保存「显示已归档」：首屏后补拉各项目归档任务，避免归档列表为空 */
+    if (state.showArchived) await ensureAllArchived();
     /* 先以 card 完成首屏 render（含 GSAP），再切 capsule，避免 .pane 不存在的警告 */
     render();
   } else {
@@ -2976,7 +3204,6 @@ async function boot() {
     renderSetup();
   }
   setInterval(pollTasks, POLL_MS);   /* 轮询兜底：文件监听之外的保险 */
-  bindWatch();
 }
 
 boot();
