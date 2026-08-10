@@ -1529,82 +1529,49 @@ function renderBack(t, docs, loading, error) {
   scheduleWindowFit();   /* 文档高度变化（含异步加载完成、切标签）后重对齐窗口 */
 }
 
-/* ---------- 极简 markdown 渲染（先转义，支持标题/列表/粗斜体/行内码/代码块/引用/分隔线/链接） ---------- */
+/* ---------- markdown 渲染（vendor marked；walkTokens 转义原生 html；按 h2 重组折叠） ---------- */
+const escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+/* 只注册一次：原生 HTML token 转义为文本（不引入 DOMPurify，源是本地可信文档） */
+if (typeof marked !== 'undefined') {
+  marked.use({
+    walkTokens(token) {
+      if (token.type === 'html') {
+        token.type = 'text';
+        token.text = escHtml(token.text);
+      }
+    },
+  });
+}
 function mdRender(src) {
-  const escHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const inline = (s) => escHtml(s)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
-    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
-  const lines = String(src || '').split('\n');
+  const source = String(src || '');
+  if (!window.marked) return escHtml(source); // vendor 未加载时的安全兜底
+  const html = marked.parse(source);
+  /* 按 <h2> 切分重组进折叠分区（替代原 parser 内嵌状态机）：
+     h2 及后续内容进 <details class="doc-section">；h2 之前的头部内容原样保留。 */
+  const h2Re = /<h2[^>]*>[\s\S]*?<\/h2>/g;
+  const matches = html.match(h2Re) || [];
+  if (!matches.length) return html;
   const out = [];
-  let i = 0;
-  let sectionOpen = false;
-  const closeSection = () => {
-    if (!sectionOpen) return;
-    out.push('</div></details>');
-    sectionOpen = false;
-  };
-  while (i < lines.length) {
-    const line = lines[i];
-    /* 代码块 */
-    if (/^```/.test(line)) {
-      const buf = [];
-      i++;
-      while (i < lines.length && !/^```/.test(lines[i])) { buf.push(lines[i]); i++; }
-      i++;
-      out.push(`<pre><code>${escHtml(buf.join('\n'))}</code></pre>`);
-      continue;
+  let cursor = 0;
+  for (const match of matches) {
+    const idx = html.indexOf(match, cursor);
+    if (idx > cursor) out.push(html.slice(cursor, idx));
+    const title = match.replace(/^<h2[^>]*>/i, '').replace(/<\/h2>$/i, '');
+    out.push(`<details class="doc-section" open><summary>${title}</summary><div class="doc-section-body">`);
+    cursor = idx + match.length;
+    /* 找下一个 h2 的位置作为本分区内容的结束 */
+    const nextIdx = html.slice(cursor).search(h2Re);
+    if (nextIdx >= 0) {
+      out.push(html.slice(cursor, cursor + nextIdx));
+      out.push('</div></details>');
+      cursor += nextIdx;
+    } else {
+      out.push(html.slice(cursor));
+      out.push('</div></details>');
+      cursor = html.length;
     }
-    /* 标题 */
-    const h = line.match(/^(#{1,4})\s+(.*)$/);
-    if (h) {
-      const lv = h[1].length;
-      if (lv === 1) closeSection();
-      if (lv === 2) {
-        closeSection();
-        out.push(`<details class="doc-section" open><summary>${inline(h[2])}</summary><div class="doc-section-body">`);
-        sectionOpen = true;
-        i++;
-        continue;
-      }
-      out.push(`<h${lv}>${inline(h[2])}</h${lv}>`);
-      i++;
-      continue;
-    }
-    /* 分隔线 */
-    if (/^\s*(---+|\*\*\*+)\s*$/.test(line)) { out.push('<hr/>'); i++; continue; }
-    /* 引用块 */
-    if (/^>\s?/.test(line)) {
-      const buf = [];
-      while (i < lines.length && /^>\s?/.test(lines[i])) { buf.push(lines[i].replace(/^>\s?/, '')); i++; }
-      out.push(`<blockquote>${buf.map(inline).join('<br/>')}</blockquote>`);
-      continue;
-    }
-    /* 无序/有序列表（支持两格缩进嵌套一层） */
-    if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
-      const ordered = /^\s*\d+\./.test(line);
-      const tag = ordered ? 'ol' : 'ul';
-      const items = [];
-      while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
-        items.push(`<li>${inline(lines[i].replace(/^\s*([-*+]|\d+\.)\s+/, ''))}</li>`);
-        i++;
-      }
-      out.push(`<${tag}>${items.join('')}</${tag}>`);
-      continue;
-    }
-    /* 空行 */
-    if (!line.trim()) { i++; continue; }
-    /* 普通段落：合并连续行 */
-    const buf = [line];
-    i++;
-    while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|```|>\s?|\s*([-*+]|\d+\.)\s|\s*(---|\*\*\*))/.test(lines[i])) {
-      buf.push(lines[i]); i++;
-    }
-    out.push(`<p>${buf.map(inline).join('<br/>')}</p>`);
   }
-  closeSection();
+  if (cursor < html.length) out.push(html.slice(cursor));
   return out.join('');
 }
 
@@ -2898,7 +2865,7 @@ function bindUI() {
   /* 点击卡片空白区翻面；避让顶栏/菜单/sheet */
   $('flip').addEventListener('click', (e) => {
     if (state.mode !== 'card' || state.treeOpen || state.adminOpen || state.menuOpen) return;
-    if (e.target.closest('.subs, button, a, details, .doc, .runtime-evidence, .arts-mini, .dtabs, .sheet, .dragbar, input, .card-topbar, .menu-pop, .project-pop')) return;
+    if (e.target.closest('.subs, button, a, details, .doc, .runtime-evidence, .arts-mini, .dtabs, .sheet, .dragbar, input, .card-topbar, .menu-pop, .project-pop, .excerpt')) return;
     toggleFlip();
   });
 
@@ -2960,13 +2927,14 @@ function bindUI() {
   });
 }
 
-/* ---------- 摘要 hover 展开/收起触发窗口高度跟随（防抖一次性 resize） ---------- */
+/* ---------- 摘要点击展开/收起（不再 hover 触发，避免窗口被拉伸） ---------- */
 function bindExcerptFit() {
-  document.addEventListener('mouseover', (e) => {
-    if (e.target.closest && e.target.closest('.excerpt')) scheduleWindowFit();
-  });
-  document.addEventListener('mouseout', (e) => {
-    if (e.target.closest && e.target.closest('.excerpt')) scheduleWindowFit();
+  document.addEventListener('click', (e) => {
+    const excerpt = e.target.closest && e.target.closest('.excerpt');
+    if (!excerpt) return;
+    excerpt.classList.toggle('expanded');
+    /* 展开后窗口高度跟随（防抖一次性 resize）；收起恢复 */
+    scheduleWindowFit();
   });
   /* 原生窗口 resize 完成后，WebView 的 innerHeight 才会更新；重新测量
      可避免卡片仍按 resize 前的视口高度布局，导致底部出现透明空白。 */

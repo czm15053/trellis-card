@@ -346,7 +346,8 @@ body[data-layout="front-refined"] .face.front .excerpt::after{
   color:color-mix(in srgb,var(--accent) 62%,var(--mist));font-family:var(--mono);
   font-size:10px;font-style:normal;line-height:1;background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--ink2) 88%,transparent) 35%)
 }
-body[data-layout="front-refined"] .face.front .excerpt:hover{max-height:22em}
+/* 摘要改为点击展开（styles.css .excerpt.expanded），不做 hover 触发 */
+body[data-layout="front-refined"] .face.front .excerpt.expanded{max-height:22em;overflow-y:auto}
 body[data-layout="front-refined"] .face.front .desc{
   font-size:13px;line-height:1.62;-webkit-line-clamp:7
 }
@@ -365,7 +366,7 @@ body[data-layout="front-refined"] .face.front .sub-caption .hint{color:var(--dim
 body[data-layout="front-refined"] .face.front .subline{margin-top:7px}
 body[data-layout="front-refined"] .face.front .subline .cur{font-size:13.5px}
 body[data-layout="front-refined"] .face.front .subline .n{font-size:10.5px}
-body[data-layout="front-refined"] .face.front .subs:hover .sublist{grid-template-rows:1fr}
+/* 子任务清单已有点击展开（.subs.open），去掉 hover 展开避免卡片延展 */
 body[data-layout="front-refined"] .face.front .meta{
   margin-top:4px;gap:4px;min-height:20px;opacity:.88
 }
