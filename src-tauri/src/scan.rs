@@ -469,6 +469,27 @@ pub fn scan_tasks_with_archived(project_dir: &Path) -> (Vec<Task>, Vec<String>) 
     scan_tasks_inner(project_dir, true)
 }
 
+// 只扫描 archive/ 下的已归档任务（懒加载：前端勾选「显示已归档」或聚焦归档任务时才调用，
+// 避免常规轮询每次都扫 archive/ 拖慢全项目扫描）。version 语义由调用方单独计算。
+pub fn scan_archived(project_dir: &Path) -> (Vec<Task>, Vec<String>) {
+    let tasks_dir = project_dir.join(".trellis").join("tasks");
+    let mut tasks = Vec::new();
+    let mut errors = Vec::new();
+    let archive_dir = tasks_dir.join("archive");
+    if is_directory(&archive_dir) {
+        let sessions = scan_sessions(project_dir);
+        scan_archived_dir(&tasks_dir, &archive_dir, &sessions, &mut tasks, &mut errors);
+    }
+    tasks.sort_by(|a, b| {
+        a.created_at
+            .clone()
+            .unwrap_or_default()
+            .cmp(&b.created_at.clone().unwrap_or_default())
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    (tasks, errors)
+}
+
 fn scan_tasks_inner(project_dir: &Path, include_archived: bool) -> (Vec<Task>, Vec<String>) {
     let tasks_dir = project_dir.join(".trellis").join("tasks");
     let mut tasks = Vec::new();
@@ -772,6 +793,22 @@ mod tests {
         let f = setup("notrellis");
         let (tasks, errors) = scan_tasks(&f.root.join("work/beta"));
         assert!(tasks.is_empty() && errors.is_empty());
+    }
+
+    #[test]
+    fn scan_archived_returns_only_archive_tasks() {
+        let f = setup("scan-archived-only");
+        /* 懒加载路径：scan_archived 只扫 archive/，不返回任何活跃任务 */
+        let (tasks, errors) = scan_archived(&f.alpha);
+        assert!(errors.is_empty(), "懒加载不应复现活跃任务的损坏错误");
+        let archived: Vec<_> = tasks.iter().filter(|t| t.archived).collect();
+        /* fixture 中 archive/2026-02/old 有效；00-bootstrap-guidelines 被过滤 */
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].id, "old");
+        /* 活跃任务 01-a 不在结果里 */
+        assert!(!tasks.iter().any(|t| t.id == "01-a"));
+        /* dir 保留相对 tasks/ 完整路径 */
+        assert_eq!(archived[0].dir, "archive/2026-02/old");
     }
 
     #[test]

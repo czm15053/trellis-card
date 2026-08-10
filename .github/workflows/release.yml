@@ -1,6 +1,7 @@
 name: Release
 
-# 打 tag 时触发多平台构建：Windows (NSIS .exe + MSI + 便携版)、macOS arm64 + Intel (dmg)。
+# 打 tag 时触发多平台构建：Windows (NSIS .exe + MSI)、macOS arm64 + Intel (dmg)、
+# Ubuntu/Linux (deb + AppImage)。
 # 每个平台在各自的 GitHub runner 上编译，规避了 mac 无法交叉编译 Windows 的限制。
 # build 产出 bundle 存为 artifact；release job 汇总后发布到 GitHub Release。
 on:
@@ -26,6 +27,9 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             name: macos-x64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-x64
 
     runs-on: ${{ matrix.os }}
 
@@ -59,6 +63,13 @@ jobs:
           brew install llvm
           echo "/opt/homebrew/opt/llvm/bin:/usr/local/opt/llvm/bin" >> "$GITHUB_PATH"
 
+      # Ubuntu runner 需要 Tauri 的 Linux 系统依赖（webkit2gtk、gtk、appindicator 等）
+      - name: Install Linux dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
       - name: Run available tests
         # 本地未跟踪的 JS 测试存在时运行；CI 始终运行 Rust 测试。
         run: npm test
@@ -89,12 +100,12 @@ jobs:
           path: bundles
           merge-multiple: true
 
-      # 只收集最终安装包（dmg/exe/msi）到顶层，过滤中间产物（icon、脚本、裸二进制等）。
+      # 只收集最终安装包（dmg/exe/msi/deb/AppImage）到顶层，过滤中间产物（icon、脚本、裸二进制等）。
       # bundle/** 上传保留了平台子目录结构，合并后嵌套在 bundles/ 下，需 find 收拢。
       - name: Collect installer artifacts
         run: |
           mkdir -p installers
-          find bundles -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) -exec cp {} installers/ \;
+          find bundles -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.deb' -o -name '*.AppImage' \) -exec cp {} installers/ \;
           ls -la installers/
 
       - name: Publish Release

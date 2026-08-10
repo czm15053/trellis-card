@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="layout-variants.css" />
 <link rel="stylesheet" href="theme-variants.css" />
 <script src="vendor/gsap.min.js" defer></script>
+<script src="vendor/marked.min.js" defer></script>
 <script src="focus-policy.js" defer></script>
 <script src="activity-display.js" defer></script>
 <script src="app.js" defer></script>
@@ -48,6 +49,8 @@
         <button type="button" class="cap-menu-btn" id="btnCapMenu" title="胶囊菜单" aria-label="打开胶囊菜单" aria-expanded="false" aria-controls="capMenuPop"><svg class="lucide" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-more-horizontal"/></svg></button>
       </div>
       <div class="cap-body" id="capBody" role="button" tabindex="0" aria-label="打开完整任务卡片" title="点击回到卡片">
+        <div class="cap-title" id="capTitle">—</div>
+        <div class="cap-activity" id="capActivity">—</div>
         <div class="cap-status">
           <span class="orb" id="capOrb"></span>
           <span class="cap-state" id="capState">空闲</span>
@@ -55,8 +58,6 @@
           <span class="cap-progress" id="capProgress"></span>
           <span class="cap-badge" id="capBadge" hidden>0</span>
         </div>
-        <div class="cap-title" id="capTitle">—</div>
-        <div class="cap-activity" id="capActivity">—</div>
         <div class="cap-bar" id="capBar" hidden><i id="capBarFill"></i></div>
         <div class="cap-preview" id="capPreview" aria-hidden="true">
           <div class="cap-preview-top">

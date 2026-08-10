@@ -23,6 +23,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub struct AppState {
     config: Mutex<AppConfig>,
     runtime: Mutex<RuntimeStore>,
+    /* runtime 快照 build/flush 协调器：全触发源共用，串行 + debounce */
+    runtime_coord: RuntimeCoordinator,
 }
 
 #[derive(Default)]
@@ -35,6 +37,12 @@ struct RuntimeStore {
     task_statuses: HashMap<String, String>,
     /* 待 emit 的完成迁移事件（仅真实 unfinished -> completed/done 一次） */
     pending_completions: Vec<TaskCompletedEvent>,
+    /* 上次已 emit 的快照指纹：无变化时不重复 emit agent-state-changed，
+    避免 10s reconcile 等定时触发造成无谓的 IPC + 前端 render。 */
+    last_emitted_fingerprint: Option<String>,
+    /* 最近一次 coordinator flush 构建的快照缓存：get_runtime_snapshot 读它而非直接
+    build，避免与 coordinator 并发扫描 / 旧快照覆盖新状态。首次（缓存空）由调用方直建。 */
+    last_snapshot: Option<RuntimeSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,6 +90,15 @@ struct RootsOut {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TasksPayload {
+    version: String,
+    tasks: Vec<scan::Task>,
+    errors: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ArchivedPayload {
+    /* archive 独立 version（archive 内最大 mtime），不参与活跃任务的 version 比对 */
     version: String,
     tasks: Vec<scan::Task>,
     errors: Vec<String>,
@@ -325,21 +342,159 @@ fn build_runtime_snapshot(state: &AppState) -> RuntimeSnapshot {
     }
 }
 
-fn emit_runtime_snapshot(app: &AppHandle) {
+/* 快照语义指纹：反映「前端可见状态」是否变化。覆盖所有实际展示字段——
+任务级（phase/displayState/attention/confidence/action/activity/lastChangedAt/
+agent 状态与工具）+ 项目级活动 + 焦点。任务集/项目变化会改变指纹（key 含 project）。
+缺字段会导致该字段变化时前端不重渲染（活动/阶段展示卡住）。 */
+fn snapshot_fingerprint(snapshot: &RuntimeSnapshot) -> String {
+    let mut tasks: Vec<String> = snapshot
+        .tasks
+        .iter()
+        .map(|v| {
+            let agent = v.agent.as_ref();
+            let tool_input = agent
+                .and_then(|a| a.tool_input.as_ref())
+                .and_then(|t| serde_json::to_string(t).ok())
+                .unwrap_or_default();
+            format!(
+                "{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{}:{}:{}:{:?}:{:?}:{}",
+                v.project,
+                v.task_id.as_deref().unwrap_or(""),
+                v.phase,
+                v.display_state,
+                v.attention,
+                v.confidence,
+                v.action,
+                agent.map(|a| &a.state),
+                v.activity.as_deref().unwrap_or(""),
+                v.last_changed_at,
+                agent.map(|a| a.agent_kind.as_str()).unwrap_or(""),
+                agent
+                    .map(|a| a.tool_name.as_deref().unwrap_or(""))
+                    .unwrap_or(""),
+                agent.map(|a| a.event_name.as_str()).unwrap_or(""),
+                agent.map(|a| &a.waiting_reason),
+                agent
+                    .and_then(|a| a.tool_input.as_ref())
+                    .map(|_| tool_input.as_str()),
+                agent.map(|a| a.updated_at).unwrap_or(0)
+            )
+        })
+        .collect();
+    tasks.sort();
+    let mut activities: Vec<String> = snapshot
+        .project_activities
+        .iter()
+        .map(|a| {
+            let tool_input = a
+                .tool_input
+                .as_ref()
+                .and_then(|t| serde_json::to_string(t).ok())
+                .unwrap_or_default();
+            format!(
+                "{}:{}:{:?}:{}:{}:{}:{}:{}:{:?}:{:?}",
+                a.project,
+                a.session_id,
+                a.state,
+                a.agent_kind.as_str(),
+                a.tool_name.as_deref().unwrap_or(""),
+                a.activity.as_deref().unwrap_or(""),
+                a.event_name.as_str(),
+                a.updated_at,
+                a.waiting_reason,
+                a.tool_input.as_ref().map(|_| tool_input.as_str())
+            )
+        })
+        .collect();
+    /* project_activities 来自 HashMap，顺序不稳定；排序保证指纹在无真实变化时稳定。 */
+    activities.sort();
+    format!(
+        "{}|{:?}|{:?}",
+        snapshot.focus_key.as_deref().unwrap_or(""),
+        tasks,
+        activities
+    )
+}
+
+/* 单一 flush 路径：build(reduce) + 条件 emit snapshot/completions。
+reducer 副作用（task_statuses / pending_completions 写入）在 build_runtime_snapshot 内完成；
+此处只负责按序 emit。顺序不变量：focus-task-changed → agent-state-changed → task-completed。
+所有 flush 必须经 RuntimeCoordinator 串行，避免并发 build 交错扫描 / 快照顺序反转。
+「无变化不重渲染」：指纹未变且无 pending 时跳过 emit，避免 10s reconcile 等定时触发
+造成无谓的 IPC + 前端 render。pending_completions 非空时必须 emit（completion 事件是
+前端唯一一次性触发入口，不可因「快照未变」被跳过）。 */
+fn flush_snapshot(app: &AppHandle) {
     let state = app.state::<AppState>();
     let previous = state.runtime.lock().unwrap().focus_key.clone();
     let snapshot = build_runtime_snapshot(&state);
+    /* 缓存最近构建的快照：get_runtime_snapshot 读缓存而非直接 build，避免并发扫描 */
+    state.runtime.lock().unwrap().last_snapshot = Some(snapshot.clone());
+    let fp = snapshot_fingerprint(&snapshot);
+    let (completions, unchanged) = {
+        let mut runtime = state.runtime.lock().unwrap();
+        let unchanged = runtime.last_emitted_fingerprint.as_deref() == Some(fp.as_str())
+            && runtime.pending_completions.is_empty();
+        (std::mem::take(&mut runtime.pending_completions), unchanged)
+    };
+    if unchanged {
+        return;
+    }
     if previous != snapshot.focus_key {
         let _ = app.emit("focus-task-changed", &snapshot.focus_key);
     }
     let _ = app.emit("agent-state-changed", &snapshot);
-    /* 完成迁移事件：drain pending 后逐个 emit，前端幂等消费（仅触发一次刷新） */
-    let completions = {
-        let mut runtime = state.runtime.lock().unwrap();
-        std::mem::take(&mut runtime.pending_completions)
-    };
+    state.runtime.lock().unwrap().last_emitted_fingerprint = Some(fp);
     for completed in completions {
         let _ = app.emit("task-completed", &completed);
+    }
+}
+
+/* RuntimeCoordinator：runtime 快照 build/flush 的唯一入口，trailing debounce + 串行。
+- 触发源（hook 事件、10s reconcile、get_runtime_snapshot）都调用 request()，经
+  channel 信号唤醒调度线程；
+- 调度线程对信号做 trailing debounce（窗口内新信号重置计时），窗口结束执行一次
+  flush_snapshot；单线程串行保证并发触发不会交错扫描或颠倒快照顺序。 */
+struct RuntimeCoordinator {
+    tx: std::sync::mpsc::Sender<()>,
+}
+
+const RUNTIME_DEBOUNCE_MS: u64 = 250;
+
+impl RuntimeCoordinator {
+    /* 仅建 channel、不 spawn 线程：供测试无 AppHandle 时构造。 */
+    #[cfg(test)]
+    fn new() -> Self {
+        let (tx, _rx) = std::sync::mpsc::channel::<()>();
+        RuntimeCoordinator { tx }
+    }
+
+    /* 启动调度线程（生产路径）：trailing debounce + 单线程串行。 */
+    fn spawn(app: AppHandle) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let coord = RuntimeCoordinator { tx };
+        std::thread::spawn(move || {
+            loop {
+                /* 等待至少一个触发信号；上游全部断开则退出。 */
+                if rx.recv().is_err() {
+                    return;
+                }
+                /* trailing debounce：继续收，直到 debounce 窗口内无新信号。 */
+                loop {
+                    match rx.recv_timeout(std::time::Duration::from_millis(RUNTIME_DEBOUNCE_MS)) {
+                        Ok(()) => continue,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+                flush_snapshot(&app);
+            }
+        });
+        coord
+    }
+
+    fn request(&self) {
+        /* 发送失败（线程已退出）时静默降级：flush 不可用比阻塞更安全。 */
+        let _ = self.tx.send(());
     }
 }
 
@@ -406,7 +561,9 @@ where
             }
         }
     }
-    emit_runtime_snapshot(app);
+    /* hook 事件经 coordinator 串行 flush：debounce 内多个事件只 build/flush 一次，
+    避免每次 hook 立即全项目 scan。hook-tasks-changed 同步 emit（前端 refresh 走 coordinator）。 */
+    state.runtime_coord.request();
     if dynamic_project_added || refresh_action.is_some() {
         let _ = app.emit(
             "hook-tasks-changed",
@@ -446,16 +603,36 @@ fn start_runtime_workers(app: &AppHandle) {
         std::thread::sleep(std::time::Duration::from_millis(250));
     });
 
+    /* 10s reconcile：覆盖 session 过期 → Stale/Idle 等无文件、无 hook 的状态迁移。
+    经 coordinator 串行 flush（不与 hook 事件并发）。 */
     let app_for_timer = app.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(10));
-        emit_runtime_snapshot(&app_for_timer);
+        let state = app_for_timer.state::<AppState>();
+        state.runtime_coord.request();
     });
 }
 
 #[tauri::command]
 fn get_runtime_snapshot(state: State<AppState>) -> RuntimeSnapshot {
-    build_runtime_snapshot(&state)
+    /* 读 coordinator 最近 flush 的缓存快照，而非直接 build：
+    - 有缓存：返回（可能旧 250ms，但由事件/10s reconcile 补齐），并触发一次 coordinator
+      request 保持新鲜（异步，不阻塞本命令，避免与 flush 并发 build）；
+    - 无缓存（首次启动）：直接 build 一次初始化（reducer 副作用幂等，仅初始化）。
+    这保证所有「有事件活动」期间的 build 都经 coordinator 串行，消除重复扫描和
+    旧快照覆盖新状态。 */
+    let cached = state.runtime.lock().unwrap().last_snapshot.clone();
+    match cached {
+        Some(snapshot) => {
+            state.runtime_coord.request();
+            snapshot
+        }
+        None => {
+            let snapshot = build_runtime_snapshot(&state);
+            state.runtime.lock().unwrap().last_snapshot = Some(snapshot.clone());
+            snapshot
+        }
+    }
 }
 
 #[tauri::command]
@@ -543,9 +720,25 @@ fn list_tasks(state: State<AppState>, project: String) -> Result<TasksPayload, S
     if !is_allowed_project(&state, &project) {
         return Err("项目未在扫描目录中".into());
     }
-    // 含 archive/ 下的已归档任务：前端用 t.archived 区分，勾选「显示已归档」时展示
-    let (tasks, errors) = scan::scan_tasks_with_archived(&expand(&project));
+    /* 默认只扫活跃任务：常规轮询不碰 archive/，避免全项目扫描被归档目录拖慢。
+    已归档任务由 list_archived 懒加载（前端勾选「显示已归档」/聚焦归档任务时调用）。 */
+    let (tasks, errors) = scan::scan_tasks(&expand(&project));
     Ok(TasksPayload {
+        version: scan::tasks_version(&tasks),
+        tasks,
+        errors,
+    })
+}
+
+/* 归档任务懒加载：只扫 archive/，返回独立 archivedVersion。
+前端合并回同一 project bucket 时，不得用 archivedVersion 覆盖活跃任务的 version。 */
+#[tauri::command]
+fn list_archived(state: State<AppState>, project: String) -> Result<ArchivedPayload, String> {
+    if !is_allowed_project(&state, &project) {
+        return Err("项目未在扫描目录中".into());
+    }
+    let (tasks, errors) = scan::scan_archived(&expand(&project));
+    Ok(ArchivedPayload {
         version: scan::tasks_version(&tasks),
         tasks,
         errors,
@@ -773,24 +966,32 @@ fn fit_window_height(app: AppHandle, height: f64) -> Result<(), String> {
         let max_h = monitor.size().height as f64 / scale - 40.0;
         h = h.min(max_h);
     }
-    /* macOS 无边框窗口在 resizable=false 时可能忽略 set_size。 */
-    let _ = window.set_resizable(true);
+    /* macOS 无边框窗口在 resizable=false 时可能忽略 set_size，需临时置可调整再恢复。
+    Windows 上该往返会触发无边框窗口的 DWM 重排（高性能损耗且无收益），跳过。
+    平台差异化用 cfg! 运行时判断，保证两平台各自行为不变。 */
+    if !cfg!(windows) {
+        let _ = window.set_resizable(true);
+    }
     if let Err(error) = window.set_size(tauri::LogicalSize::new(w, h)) {
-        let _ = window.set_resizable(false);
+        if !cfg!(windows) {
+            let _ = window.set_resizable(false);
+        }
         return Err(error.to_string());
     }
     if let Some(position) = position {
         let _ = window.set_position(position);
     }
-    /* 原生 resize 异步提交；延迟恢复位置和不可调整状态。 */
+    /* 原生 resize 异步提交；macOS 延迟恢复位置和不可调整状态。 */
     let delayed_window = window.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(180));
         if let Some(position) = position {
             let _ = delayed_window.set_position(position);
         }
-        std::thread::sleep(std::time::Duration::from_millis(70));
-        let _ = delayed_window.set_resizable(false);
+        if !cfg!(windows) {
+            std::thread::sleep(std::time::Duration::from_millis(70));
+            let _ = delayed_window.set_resizable(false);
+        }
     });
     Ok(())
 }
@@ -803,9 +1004,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let cfg = config::load();
+            let handle = app.handle().clone();
             app.manage(AppState {
                 config: Mutex::new(cfg.clone()),
                 runtime: Mutex::new(RuntimeStore::default()),
+                runtime_coord: RuntimeCoordinator::spawn(handle.clone()),
             });
 
             start_runtime_workers(app.handle());
@@ -858,6 +1061,7 @@ pub fn run() {
             remove_root,
             list_projects,
             list_tasks,
+            list_archived,
             get_task,
             archive_task,
             set_always_on_top,
@@ -903,6 +1107,113 @@ mod tests {
         assert_eq!(docs[3].name, "research/竞品.md");
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn fp_view(tool_input: Option<runtime::ToolActivityInput>) -> TaskRuntimeView {
+        use runtime::{AgentRuntime, AgentState};
+        TaskRuntimeView {
+            project: "/repo/alpha".into(),
+            task_id: Some("07-demo".into()),
+            task_status: "in_progress".into(),
+            phase: Some("implement".into()),
+            display_state: runtime::DisplayState::Working,
+            attention: runtime::AttentionLevel::Informative,
+            confidence: runtime::Confidence::High,
+            action: None,
+            agent: Some(AgentRuntime {
+                session_id: "s1".into(),
+                agent_kind: "claude".into(),
+                project: "/repo/alpha".into(),
+                task_id: Some("07-demo".into()),
+                event_name: "PreToolUse".into(),
+                state: AgentState::Working,
+                waiting_reason: None,
+                tool_name: Some("Read".into()),
+                tool_input,
+                activity: Some("读取 task.json".into()),
+                started_at: 100,
+                updated_at: 100,
+            }),
+            activity: Some("读取 task.json".into()),
+            focus_score: 5,
+            last_changed_at: 100,
+        }
+    }
+
+    #[test]
+    fn snapshot_fingerprint_stable_for_unchanged() {
+        let snapshot = RuntimeSnapshot {
+            tasks: vec![fp_view(Some(runtime::ToolActivityInput {
+                file_path: Some("task.json".into()),
+                ..Default::default()
+            }))],
+            project_activities: vec![],
+            errors: vec![],
+            focus_key: Some("/repo/alpha::07-demo".into()),
+            generated_at: 100,
+        };
+        assert_eq!(
+            snapshot_fingerprint(&snapshot),
+            snapshot_fingerprint(&snapshot)
+        );
+    }
+
+    #[test]
+    fn snapshot_fingerprint_changes_on_tool_input() {
+        /* 同一秒内 tool_input 变化（updated_at 相同）：指纹必须变化，前端活动展示才能更新 */
+        let a = RuntimeSnapshot {
+            tasks: vec![fp_view(Some(runtime::ToolActivityInput {
+                file_path: Some("task.json".into()),
+                ..Default::default()
+            }))],
+            project_activities: vec![],
+            errors: vec![],
+            focus_key: Some("/repo/alpha::07-demo".into()),
+            generated_at: 100,
+        };
+        let b = RuntimeSnapshot {
+            tasks: vec![fp_view(Some(runtime::ToolActivityInput {
+                command: Some("cargo test".into()),
+                ..Default::default()
+            }))],
+            project_activities: vec![],
+            errors: vec![],
+            focus_key: Some("/repo/alpha::07-demo".into()),
+            generated_at: 100,
+        };
+        assert_ne!(snapshot_fingerprint(&a), snapshot_fingerprint(&b));
+        assert_eq!(snapshot_fingerprint(&a), snapshot_fingerprint(&a));
+    }
+
+    #[test]
+    fn snapshot_fingerprint_changes_on_agent_kind_same_timestamp() {
+        /* 同 updated_at 下 agent_kind 从 unknown -> claude：指纹必须变化（项目级标题/任务归属展示） */
+        let mut a = fp_view(Some(runtime::ToolActivityInput {
+            file_path: Some("task.json".into()),
+            ..Default::default()
+        }));
+        if let Some(agent) = a.agent.as_mut() {
+            agent.agent_kind = "unknown".into();
+        }
+        let mut b = a.clone();
+        if let Some(agent) = b.agent.as_mut() {
+            agent.agent_kind = "claude".into();
+        }
+        let snap_a = RuntimeSnapshot {
+            tasks: vec![a],
+            project_activities: vec![],
+            errors: vec![],
+            focus_key: Some("/repo/alpha::07-demo".into()),
+            generated_at: 100,
+        };
+        let snap_b = RuntimeSnapshot {
+            tasks: vec![b],
+            project_activities: vec![],
+            errors: vec![],
+            focus_key: Some("/repo/alpha::07-demo".into()),
+            generated_at: 100,
+        };
+        assert_ne!(snapshot_fingerprint(&snap_a), snapshot_fingerprint(&snap_b));
     }
 
     #[test]
@@ -1077,6 +1388,7 @@ mod tests {
                 always_on_top: false,
             }),
             runtime: Mutex::new(RuntimeStore::default()),
+            runtime_coord: RuntimeCoordinator::new(),
         }
     }
 

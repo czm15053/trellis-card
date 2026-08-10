@@ -20,6 +20,18 @@ fn value_string(value: &Value, keys: &[&str]) -> Option<String> {
         .find_map(|key| value.get(*key).and_then(Value::as_str).map(str::to_owned))
 }
 
+/* Cursor 的项目信息在 workspace_roots 数组（cwd 常为空字符串）。
+取第一个非空的工作区根目录作为项目路径。 */
+fn workspace_root(value: &Value) -> Option<String> {
+    value
+        .get("workspace_roots")
+        .and_then(Value::as_array)
+        .and_then(|arr| {
+            arr.iter()
+                .find_map(|item| item.as_str().filter(|s| !s.is_empty()).map(str::to_owned))
+        })
+}
+
 fn tool_input_value(value: &Value) -> Option<&Value> {
     value.get("tool_input").or_else(|| value.get("toolInput"))
 }
@@ -313,6 +325,8 @@ pub fn parse_hook_payload(input: &str, overrides: &HookOverrides) -> Result<Hook
         .project
         .clone()
         .or_else(|| value_string(&value, &["cwd", "project", "projectPath"]))
+        .filter(|p| !p.is_empty())
+        .or_else(|| workspace_root(&value))
         .unwrap_or_else(|| {
             std::env::current_dir()
                 .unwrap_or_default()
@@ -426,6 +440,12 @@ pub fn run_hook_cli() {
     let queue = config::inbox_dir();
     if !ipc::send_event(&event, &socket, &queue) {
         eprintln!("[hook] unable to deliver event");
+    }
+    /* Cursor 的 command hook 通过 stdout 返回 JSON。输出 {}（fail-open）明确表示
+    不阻断任何命令——即使事件送达失败也不影响 Cursor 的权限/命令行为。
+    Claude/Codex 不期望 stdout JSON，保持不输出。 */
+    if overrides.agent.as_deref() == Some("cursor") {
+        println!("{{}}");
     }
 }
 
@@ -713,5 +733,109 @@ mod tests {
         let event = parse_hook_payload(&payload, &HookOverrides::default()).unwrap();
         assert_eq!(event.task_id.as_deref(), Some("08-other"));
         let _ = std::fs::remove_dir_all(project);
+    }
+
+    /* ---- Cursor hooks 解析（扁平 payload，字段名与官方文档一致） ---- */
+
+    #[test]
+    fn cursor_session_start_payload_parses_without_cwd() {
+        /* Cursor sessionStart 输入只有 session_id/composer_mode，无 cwd；
+        project 走 override（Cursor hook 命令带 --project）。 */
+        let overrides = HookOverrides {
+            agent: Some("cursor".into()),
+            project: Some("/repo".into()),
+            ..HookOverrides::default()
+        };
+        let event = parse_hook_payload(
+            r#"{"hook_event_name":"sessionStart","session_id":"conv-123","composer_mode":"agent"}"#,
+            &overrides,
+        )
+        .unwrap();
+        assert_eq!(event.event_name, "sessionStart");
+        assert_eq!(event.session_id, "conv-123");
+        assert_eq!(event.agent_kind, "cursor");
+        assert_eq!(event.project, "/repo");
+    }
+
+    #[test]
+    fn cursor_pre_tool_use_payload_parses() {
+        /* Cursor preToolUse 输入：tool_name/tool_input.command/cwd。 */
+        let event = parse_hook_payload(
+            r#"{"hook_event_name":"preToolUse","tool_name":"Shell","tool_input":{"command":"cargo test","working_directory":"/repo"},"cwd":"/repo","tool_use_id":"abc"}"#,
+            &HookOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(event.event_name, "preToolUse");
+        assert_eq!(event.tool_name.as_deref(), Some("Shell"));
+        assert_eq!(event.activity.as_deref(), Some("cargo test"));
+        assert_eq!(event.project, "/repo");
+    }
+
+    #[test]
+    fn cursor_before_shell_execution_payload_parses() {
+        /* Cursor beforeShellExecution 输入：command/cwd，无 tool_name。 */
+        let event = parse_hook_payload(
+            r#"{"hook_event_name":"beforeShellExecution","command":"git status","cwd":"/repo","sandbox":false}"#,
+            &HookOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(event.event_name, "beforeShellExecution");
+        assert_eq!(event.activity.as_deref(), Some("git status"));
+        assert_eq!(event.project, "/repo");
+    }
+
+    #[test]
+    fn cursor_stop_payload_parses() {
+        /* Cursor stop 输入：status/loop_count。 */
+        let event = parse_hook_payload(
+            r#"{"hook_event_name":"stop","status":"completed","loop_count":0,"cwd":"/repo"}"#,
+            &HookOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(event.event_name, "stop");
+    }
+
+    #[test]
+    fn cursor_session_end_payload_parses() {
+        let event = parse_hook_payload(
+            r#"{"hook_event_name":"sessionEnd","session_id":"conv-1","reason":"completed","duration_ms":45000,"cwd":"/repo"}"#,
+            &HookOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(event.event_name, "sessionEnd");
+        assert_eq!(event.session_id, "conv-1");
+    }
+
+    #[test]
+    fn cursor_uses_workspace_roots_when_cwd_empty() {
+        /* Cursor 的 beforeShellExecution/preToolUse 事件 cwd 为空字符串，
+        项目信息在 workspace_roots 数组。必须能解析出项目。 */
+        let event = parse_hook_payload(
+            r#"{"hook_event_name":"beforeShellExecution","command":"pwd","cwd":"","workspace_roots":["/Users/czm/Desktop/heiye"],"session_id":"conv-1"}"#,
+            &HookOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(event.project, "/Users/czm/Desktop/heiye");
+        assert_eq!(event.activity.as_deref(), Some("pwd"));
+    }
+
+    #[test]
+    fn cursor_workspace_roots_picks_first_non_empty() {
+        let event = parse_hook_payload(
+            r#"{"hook_event_name":"preToolUse","tool_name":"Read","cwd":"","workspace_roots":["","/repo/alpha","/repo/beta"],"session_id":"conv-1"}"#,
+            &HookOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(event.project, "/repo/alpha");
+    }
+
+    #[test]
+    fn cursor_explicit_cwd_wins_over_workspace_roots() {
+        let event = parse_hook_payload(
+            r#"{"hook_event_name":"preToolUse","cwd":"/repo/cwd","workspace_roots":["/repo/ws"],"session_id":"conv-1"}"#,
+            &HookOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(event.project, "/repo/cwd");
     }
 }
