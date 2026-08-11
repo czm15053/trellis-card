@@ -241,8 +241,16 @@ function showUpdateBanner({ version, notes, url }) {
   $('updateVersion').textContent = `发现新版本 v${version}`;
   const notesEl = $('updateNotes');
   if (notesEl) {
-    notesEl.textContent = notes || '';
-    notesEl.hidden = !notes;
+    /* 更新说明来自 GitHub Release body（markdown）：用 marked 渲染为 HTML，保持排版。 */
+    if (notes) {
+      notesEl.innerHTML = (window.marked && window.marked.parse
+        ? window.marked.parse(notes)
+        : escHtml(notes));
+      notesEl.hidden = false;
+    } else {
+      notesEl.textContent = '';
+      notesEl.hidden = true;
+    }
   }
   const updateBtn = $('btnUpdateGo');
   if (updateBtn) {
@@ -1050,11 +1058,18 @@ function filterOptions() {
 }
 function applyProjectFilter(name) {
   state.filter = name || null;
+  /* 切换项目后重置「显示已归档」：避免不同项目归档状态混乱，用户需主动勾选才显示归档。 */
+  if (state.showArchived) {
+    state.showArchived = false;
+    savePrefs();
+    const chk = $('chkShowArchived');
+    if (chk) chk.checked = false;
+  }
   ensureFocusValid();
   closeProjectPop();
   render();
 }
-function fillFilterStars(box, { closePop = false } = {}) {
+function fillFilterStars(box) {
   if (!box) return;
   box.innerHTML = '';
   for (const opt of filterOptions()) {
@@ -1066,19 +1081,14 @@ function fillFilterStars(box, { closePop = false } = {}) {
     b.setAttribute('aria-selected', String(opt.name ? state.filter === opt.name : !state.filter));
     b.innerHTML = `<i style="--c:${opt.color}"></i>${esc(opt.label)}${opt.name ? ` ${opt.count}` : ''}`;
     b.onclick = () => {
-      if (closePop) applyProjectFilter(opt.name);
-      else {
-        state.filter = opt.name || null;
-        ensureFocusValid();
-        render();
-      }
+      applyProjectFilter(opt.name);
     };
     box.appendChild(b);
   }
 }
 function renderStars() {
   fillFilterStars($('treeStars'));
-  fillFilterStars($('projectPop'), { closePop: true });
+  fillFilterStars($('projectPop'));
   const chipLabel = $('projectChipLabel');
   if (chipLabel) chipLabel.textContent = state.filter ? state.filter : '全部项目';
   const chip = $('btnProjectChip');
@@ -1105,7 +1115,7 @@ function toggleProjectPop(force) {
   if (open) {
     /* 开 chip 时关主菜单，避免双 popover */
     if (state.menuOpen) toggleMenu(false);
-    fillFilterStars(pop, { closePop: true });
+    fillFilterStars(pop);
     pop.hidden = false;
     btn.classList.add('on');
     btn.setAttribute('aria-expanded', 'true');
@@ -3144,7 +3154,12 @@ function bindUI() {
     chkArchived.onchange = async () => {
       state.showArchived = chkArchived.checked;
       savePrefs();
-      if (chkArchived.checked) await ensureAllArchived();
+      if (chkArchived.checked) {
+        /* 勾选时强制失效并重拉所有项目归档：避免 cached（archivedVersion）导致
+           「首次勾选不显示、取消再勾选才生效」的竞态/陈旧缓存问题。 */
+        for (const n of Object.keys(state.tasksByProject)) invalidateArchived(n);
+        await ensureAllArchived();
+      }
       if (state.view === 'main') render();
     };
   }
