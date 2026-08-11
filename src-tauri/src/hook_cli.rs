@@ -838,4 +838,45 @@ mod tests {
         .unwrap();
         assert_eq!(event.project, "/repo/cwd");
     }
+
+    /* ---- Pi 桥接扩展 payload（agent=pi，session 为 pi_<sanitized> 格式） ---- */
+
+    #[test]
+    fn pi_session_start_payload_parses() {
+        let event = parse_hook_payload(
+            r#"{"agent":"pi","hook_event_name":"SessionStart","session_id":"pi_abc123","cwd":"/repo","timestamp":1700000000}"#,
+            &HookOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(event.event_name, "SessionStart");
+        assert_eq!(event.agent_kind, "pi");
+        assert_eq!(event.session_id, "pi_abc123");
+        assert_eq!(event.project, "/repo");
+        assert_eq!(event.activity, None);
+    }
+
+    #[test]
+    fn pi_before_agent_start_payload_parses() {
+        let event = parse_hook_payload(
+            r#"{"agent":"pi","hook_event_name":"UserPromptSubmit","prompt":"用 trellis 规划任务","session_id":"pi_abc123","cwd":"/repo"}"#,
+            &HookOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(event.event_name, "UserPromptSubmit");
+        assert_eq!(event.agent_kind, "pi");
+        assert_eq!(event.activity.as_deref(), Some("用 trellis 规划任务"));
+    }
+
+    #[test]
+    fn pi_tool_call_payload_parses() {
+        let event = parse_hook_payload(
+            r#"{"agent":"pi","hook_event_name":"PreToolUse","tool_name":"bash","tool_input":{"command":"cargo test"},"session_id":"pi_abc123","cwd":"/repo"}"#,
+            &HookOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(event.event_name, "PreToolUse");
+        assert_eq!(event.agent_kind, "pi");
+        assert_eq!(event.tool_name.as_deref(), Some("bash"));
+        assert_eq!(event.activity.as_deref(), Some("cargo test"));
+    }
 }

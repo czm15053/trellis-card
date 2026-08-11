@@ -13,6 +13,13 @@ const EVENTS: &[&str] = &[
     "Stop",
 ];
 
+/* Pi 不是「hook + JSON 配置」平台，而是「extension + TS 事件」平台。
+桥接扩展以用户级全局目录 ~/.pi/agent/extensions/ 安装（所有项目生效），
+Trellis Card 写入自有扩展文件，卸载时只删该文件，保留同目录其他扩展。 */
+const PI_EXTENSIONS_DIR: &str = ".pi/agent/extensions";
+const PI_BRIDGE_FILE: &str = "trellis-card.ts";
+const PI_BRIDGE_TEMPLATE: &str = include_str!("../templates/pi_bridge.ts");
+
 /* Cursor 的 hook 事件（camelCase 小写开头，hooks.json 扁平结构）。
 只采集核心事件集；Cursor 无 PermissionRequest/PostToolUse 等事件。 */
 const CURSOR_EVENTS: &[&str] = &[
@@ -252,6 +259,7 @@ fn config_path(agent: &str) -> PathBuf {
         "claude" => "TRELLIS_CARD_CLAUDE_CONFIG",
         "codex" => "TRELLIS_CARD_CODEX_CONFIG",
         "cursor" => "TRELLIS_CARD_CURSOR_CONFIG",
+        "pi" => "TRELLIS_CARD_PI_EXTENSIONS_FILE",
         _ => "TRELLIS_CARD_HOOK_CONFIG",
     };
     if let Ok(path) = std::env::var(env_key) {
@@ -274,6 +282,7 @@ fn default_config_path(agent: &str, home: &Path) -> PathBuf {
         "claude" => home.join(".claude/settings.json"),
         "codex" => home.join(".codex/hooks.json"),
         "cursor" => home.join(".cursor/hooks.json"),
+        "pi" => home.join(PI_EXTENSIONS_DIR).join(PI_BRIDGE_FILE),
         _ => home.join(".config/trellis-card/hooks.json"),
     }
 }
@@ -294,8 +303,26 @@ fn hook_command(executable: &Path, agent: &str) -> String {
 }
 
 pub fn install_hooks(agent: &str, uninstall: bool) -> Result<PathBuf, String> {
-    if !matches!(agent, "claude" | "codex" | "cursor") {
-        return Err("agent must be codex, claude or cursor".into());
+    if !matches!(agent, "claude" | "codex" | "cursor" | "pi") {
+        return Err("agent must be codex, claude, cursor or pi".into());
+    }
+    /* Pi：无 JSON hook 配置，桥接扩展是用户级目录里的独立文件。
+    安装=写入自有扩展文件（幂等），卸载=删除自有文件（保留同目录其他扩展）。 */
+    if agent == "pi" {
+        let path = config_path(agent);
+        if uninstall {
+            if path.exists() {
+                fs::remove_file(&path).map_err(|error| error.to_string())?;
+            }
+        } else {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            /* 原子写入：与 claude/codex/cursor 的 write_atomic 保持一致，
+            避免 Pi 加载扩展时读到半截文件。 */
+            write_atomic(&path, PI_BRIDGE_TEMPLATE.as_bytes())?;
+        }
+        return Ok(path);
     }
     let path = config_path(agent);
     let (mut config, config_exists) = load_json(&path)?;
@@ -324,10 +351,20 @@ pub fn install_hooks(agent: &str, uninstall: bool) -> Result<PathBuf, String> {
 }
 
 pub fn status(agent: &str) -> Result<HookStatus, String> {
-    if !matches!(agent, "codex" | "claude" | "cursor") {
-        return Err("agent must be codex, claude or cursor".into());
+    if !matches!(agent, "codex" | "claude" | "cursor" | "pi") {
+        return Err("agent must be codex, claude, cursor or pi".into());
     }
     let path = config_path(agent);
+    if agent == "pi" {
+        /* Pi 的「配置」就是扩展文件本身：installed = 文件存在。 */
+        let installed = path.is_file();
+        return Ok(HookStatus {
+            agent: agent.to_owned(),
+            installed,
+            config_exists: installed,
+            config_path: path.to_string_lossy().into_owned(),
+        });
+    }
     let (config, config_exists) = load_json(&path)?;
     Ok(HookStatus {
         agent: agent.to_owned(),
@@ -338,7 +375,7 @@ pub fn status(agent: &str) -> Result<HookStatus, String> {
 }
 
 pub fn statuses() -> Result<Vec<HookStatus>, String> {
-    ["codex", "claude", "cursor"]
+    ["codex", "claude", "cursor", "pi"]
         .into_iter()
         .map(status)
         .collect()
@@ -487,6 +524,62 @@ mod tests {
             default_config_path("cursor", home),
             home.join(".cursor/hooks.json")
         );
+    }
+
+    /* ---- Pi 桥接扩展（用户级 ~/.pi/agent/extensions/trellis-card.ts） ---- */
+
+    #[test]
+    fn pi_uses_user_level_extensions_file_path() {
+        let home = Path::new("/tmp/test-home");
+        assert_eq!(
+            default_config_path("pi", home),
+            home.join(".pi/agent/extensions/trellis-card.ts")
+        );
+    }
+
+    #[test]
+    fn pi_install_writes_bridge_file_and_status_detects_it() {
+        let home = std::env::temp_dir().join(format!(
+            "trellis-card-pi-install-{}",
+            std::process::id()
+        ));
+        std::env::set_var("TRELLIS_CARD_PI_EXTENSIONS_FILE", home.join("trellis-card.ts"));
+        let path = config_path("pi");
+        let _ = std::fs::remove_file(&path);
+
+        assert!(!path.exists());
+        let before = status("pi").unwrap();
+        assert!(!before.installed);
+
+        install_hooks("pi", false).unwrap();
+        let after = status("pi").unwrap();
+        assert!(after.installed);
+        assert_eq!(after.config_path, path.to_string_lossy());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("Trellis Card bridge extension for Pi"));
+        assert!(content.contains("export default function (pi: any)"));
+
+        /* 幂等：重复安装不报错、不重复 */
+        install_hooks("pi", false).unwrap();
+        let same = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, same);
+
+        /* 卸载：只删自有文件，同目录其他扩展保留 */
+        std::fs::write(home.join("other-extension.ts"), "export default function(pi){}\n").unwrap();
+        install_hooks("pi", true).unwrap();
+        assert!(!path.exists());
+        assert!(home.join("other-extension.ts").exists());
+        let after_uninstall = status("pi").unwrap();
+        assert!(!after_uninstall.installed);
+
+        let _ = std::fs::remove_dir_all(&home);
+        std::env::remove_var("TRELLIS_CARD_PI_EXTENSIONS_FILE");
+    }
+
+    #[test]
+    fn pi_rejects_unknown_agent() {
+        assert!(install_hooks("unknown", false).is_err());
+        assert!(status("unknown").is_err());
     }
 
     #[test]
