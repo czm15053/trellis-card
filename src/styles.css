@@ -1069,6 +1069,17 @@ body.rel-canvas .rel-graph{
   font-family:var(--mono);font-size:7.5px;color:var(--mist);
   border:1px solid var(--line2);border-radius:4px;padding:0 4px;
 }
+.rel-board-pri{font-family:var(--mono);font-size:7.5px;border-radius:4px;padding:0 4px}
+.rel-board-pri.pri-p0{color:#f07178;border:1px solid color-mix(in srgb,#f07178 40%,var(--line2));background:color-mix(in srgb,#f07178 10%,transparent)}
+.rel-board-pri.pri-p1{color:#e7c56a;border:1px solid color-mix(in srgb,#e7c56a 35%,var(--line2))}
+.rel-board-pri:not(.pri-p0):not(.pri-p1){color:var(--dim);border:1px solid var(--line2)}
+.rel-board-card.pri-p0{border-left:3px solid #f07178}
+.rel-board-card.pri-p1{border-left:3px solid #e7c56a}
+.rel-board-specs{
+  font-family:var(--mono);font-size:7.5px;color:#4aa3ff;
+  border:1px solid color-mix(in srgb,#4aa3ff 30%,var(--line2));
+  border-radius:4px;padding:0 4px;
+}
 
 /* 项目规范地图：trellis-update-spec 沉淀的团队规范（可展开正文） */
 .rel-spec-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;padding:8px}

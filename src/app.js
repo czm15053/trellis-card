@@ -2295,14 +2295,21 @@ function renderRelations(focused) {
     const lastTs = (rt && rt.lastChangedAt) ? rt.lastChangedAt * 1000
       : (t.mtime && t.mtime > 100_000_000_000 ? t.mtime : (t.mtime || 0) * 1000);
     const relTimeStr = lastTs ? relTime(lastTs) || '' : '';
+    /* 优先级（P0/P1/P2）：P0/P1 高优先任务更突出 */
+    const pri = t.priority || '';
+    const priClass = pri === 'P0' ? 'pri-p0' : pri === 'P1' ? 'pri-p1' : '';
+    /* 规范使用数：任务引用了几个 spec（specRefs）——体现任务与团队规范的关系 */
+    const specUsed = (t.specRefs || []).length;
     /* 会话协作：同一任务被多个 AI session 处理（after_finish 语义，跨会话协作） */
     const sessCount = (t.sessions || []).length;
-    return `<button type="button" class="rel-board-card${t.archived ? ' archived' : ''}${active ? ' live' : ''}" data-key="${esc(keyOf(t))}" style="--bc:${statusColor}">
+    return `<button type="button" class="rel-board-card${t.archived ? ' archived' : ''}${active ? ' live' : ''}${priClass ? ' ' + priClass : ''}" data-key="${esc(keyOf(t))}" style="--bc:${statusColor}">
       <span class="rel-board-title">${active ? '<span class="live-dot" title="有活跃会话"></span>' : ''}${esc((t.title || t.id).slice(0, 34))}</span>
       <span class="rel-board-meta">
         <span class="rel-board-status">${esc((t.phase && t.phase.label) || t.status || '')}</span>
+        ${pri ? `<span class="rel-board-pri ${priClass}">${esc(pri)}</span>` : ''}
         ${state.projects.length > 1 && t.project ? `<span class="rel-board-proj">${esc(t.project)}</span>` : ''}
         ${sessCount > 1 ? `<span class="rel-board-sess" title="${sessCount} 个 AI 会话处理过此任务">${sessCount} 会话</span>` : ''}
+        ${specUsed ? `<span class="rel-board-specs" title="引用 ${specUsed} 个规范">${specUsed} 规范</span>` : ''}
         ${t.phase && t.phase.warn ? '<span class="rel-board-warn">需规范</span>' : ''}
         ${editShort ? `<span class="rel-board-file" title="${esc(editing)}">编辑 ${esc(editShort)}</span>` : ''}
         ${subs.length ? `<span class="rel-board-todo">待办 ${doneN}/${subs.length}</span>` : ''}
@@ -2355,8 +2362,8 @@ function renderRelations(focused) {
           <span class="rel-board-group-count">已沉淀 ${filledSpecs.length} · 空 ${emptySpecs.length}</span>
         </div>
         ${specCollapsed ? '' : `
-          ${filledSpecs.length ? `<div class="rel-spec-sub-label">已沉淀规范（${filledSpecs.length}）</div><div class="rel-spec-grid">${filledSpecs.map(specCard).join('')}</div>` : ''}
-          ${emptySpecs.length ? `<details class="rel-spec-empty-group"><summary>空模板规范（${emptySpecs.length}）▸</summary><div class="rel-spec-grid">${emptySpecs.map(specCard).join('')}</div></details>` : ''}
+          ${filledSpecs.length ? `<div class="rel-spec-sub-label">已沉淀规范（${filledSpecs.length}）· 项目经验沉淀</div><div class="rel-spec-grid">${filledSpecs.map(specCard).join('')}</div>` : ''}
+          ${emptySpecs.length ? `<details class="rel-spec-empty-group"><summary>空模板规范（${emptySpecs.length}）· 待填充 ▸</summary><div class="rel-spec-grid">${emptySpecs.map(specCard).join('')}</div></details>` : ''}
         `}
       </div>`;
     }
@@ -2401,12 +2408,24 @@ function renderRelations(focused) {
       }
     }
     const sharedGroups = [...sharedMap.values()].filter(g => g.members.length >= 2);
-    /* 计数：共享关联涉及的去重任务数 */
+    /* 共享规范区：被 ≥2 任务引用的 spec（任务引用同一规范 = 共享规范知识） */
+    const specMap2 = new Map();
+    for (const t of filtered) {
+      for (const r of (t.specRefs || [])) {
+        if (!r) continue;
+        const key = `${t.project}::${r}`;
+        if (!specMap2.has(key)) specMap2.set(key, { ref: r, members: [] });
+        specMap2.get(key).members.push(t);
+      }
+    }
+    const sharedSpecGroups = [...specMap2.values()].filter(g => g.members.length >= 2);
+    /* 计数：共享关联涉及的去重任务数（文件 + 规范） */
     const linkedTaskSet = new Set();
     for (const g of sharedGroups) for (const m of g.members) linkedTaskSet.add(keyOf(m));
+    for (const g of sharedSpecGroups) for (const m of g.members) linkedTaskSet.add(keyOf(m));
     relCount = linkedTaskSet.size;
-    if (!sharedGroups.length) {
-      html += `<div class="tree-empty">暂无共享文件关联（任务间没有共同引用的决策/分析文档）</div>`;
+    if (!sharedGroups.length && !sharedSpecGroups.length) {
+      html += `<div class="tree-empty">暂无共享关联（任务间没有共同引用的决策/分析/规范）</div>`;
     } else {
       for (const g of sharedGroups) {
         const col = REL_SPEC_COLORS[specColorIndex(g.ref)];
@@ -2421,6 +2440,19 @@ function renderRelations(focused) {
           <div class="rel-board-group-h">
             <span class="rel-board-group-dot" style="background:${col}"></span>
             <span class="rel-board-group-name" title="${esc(g.ref)}">共享${typeLabel} · ${esc(refName)}</span>
+            <span class="rel-board-group-count">${g.members.length} 任务</span>
+          </div>
+          <div class="rel-board-cards">${g.members.map(card).join('')}</div>
+        </div>`;
+      }
+      /* 共享规范区（被 ≥2 任务引用的 spec） */
+      for (const g of sharedSpecGroups) {
+        const col = REL_SPEC_COLORS[specColorIndex(g.ref)];
+        const refName = g.ref.split('/').pop();
+        html += `<div class="rel-board-group">
+          <div class="rel-board-group-h">
+            <span class="rel-board-group-dot" style="background:${col}"></span>
+            <span class="rel-board-group-name" title="${esc(g.ref)}">共享规范 · ${esc(refName)}</span>
             <span class="rel-board-group-count">${g.members.length} 任务</span>
           </div>
           <div class="rel-board-cards">${g.members.map(card).join('')}</div>
