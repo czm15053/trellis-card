@@ -120,6 +120,68 @@ struct TaskDetail {
     docs: Vec<DocOut>,
 }
 
+// ---------- 任务关联视图 ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskRelation {
+    id: String,
+    dir: String,
+    title: String,
+    status: String,
+    phase: scan::Phase,
+    dev_type: Option<String>,
+    scope: Option<String>,
+    parent: Option<String>,
+    children: Vec<String>,
+    spec_refs: Vec<String>,
+    file_refs: Vec<String>,
+    prd_refs: Vec<String>,
+    subtasks: Vec<scan::Subtask>,
+    sessions: Vec<scan::SessionInfo>,
+    progress: f64,
+    kind: String,
+    archived: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpecGroup {
+    path: String,
+    count: usize,
+    task_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PrdGroup {
+    // 被引用的任务 id（官方 FAQ Q25 跨任务内容引用）
+    ref_task_id: String,
+    // 引用它的任务 id 列表
+    task_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RelationsPayload {
+    tasks: Vec<TaskRelation>,
+    spec_groups: Vec<SpecGroup>,
+    prd_groups: Vec<PrdGroup>,
+}
+
+// 项目规范地图条目：规范路径、显示名、分类、填写状态、被引用次数、正文
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpecOut {
+    path: String,
+    name: String,
+    category: String,
+    filled: bool,
+    line_count: usize,
+    referenced_by: usize,
+    content: String,
+}
+
 // ---------- 辅助 ----------
 
 fn expand(p: &str) -> PathBuf {
@@ -757,6 +819,136 @@ fn list_archived(state: State<AppState>, project: String) -> Result<ArchivedPayl
     })
 }
 
+/* 任务关联视图数据：每个任务的 spec 引用 + dev_type/scope + 父子，以及被 ≥2 个
+活跃任务引用的共享 spec（共享地盘）。只统计活跃任务，归档不参与，避免过期 spec 污染。 */
+#[tauri::command]
+fn list_relations(state: State<AppState>, project: String) -> Result<RelationsPayload, String> {
+    if !is_allowed_project(&state, &project) {
+        return Err("项目未在扫描目录中".into());
+    }
+    /* 关联视图纳入归档任务（spec 共享 / 父子 / 内容树都覆盖归档），
+       归档任务的 spec_refs 可能引用已归档的 spec，但正是历史「地盘」的真实痕迹。
+       归档任务用 archived + dir 标记，前端 keyOf 用 dir 区分身份。 */
+    let (tasks, _) = scan::scan_tasks_with_archived(&expand(&project));
+    let task_relations: Vec<TaskRelation> = tasks
+        .iter()
+        .map(|t| TaskRelation {
+            id: t.id.clone(),
+            dir: t.dir.clone(),
+            title: t.title.clone(),
+            status: t.status.clone(),
+            phase: t.phase.clone(),
+            dev_type: t.dev_type.clone(),
+            scope: t.scope.clone(),
+            parent: t.parent.clone(),
+            children: t.children.clone(),
+            spec_refs: t.spec_refs.clone(),
+            file_refs: t.file_refs.clone(),
+            prd_refs: t.prd_refs.clone(),
+            subtasks: t.subtasks.clone(),
+            sessions: t.sessions.clone(),
+            progress: t.progress,
+            kind: t.kind.clone(),
+            archived: t.archived,
+        })
+        .collect();
+    let spec_groups = compute_spec_groups(&task_relations);
+    let prd_groups = compute_prd_groups(&task_relations);
+    Ok(RelationsPayload {
+        tasks: task_relations,
+        spec_groups,
+        prd_groups,
+    })
+}
+
+// 项目通用规范地图：扫描 .trellis/spec/ 返回每个规范的路径、填写状态、
+// 被任务引用次数（trellis-update-spec 沉淀的团队知识资产）。
+#[tauri::command]
+fn list_specs(state: State<AppState>, project: String) -> Result<Vec<SpecOut>, String> {
+    if !is_allowed_project(&state, &project) {
+        return Err("项目未在扫描目录中".into());
+    }
+    let spec_root = expand(&project).join(".trellis").join("spec");
+    let mut specs = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&spec_root) {
+        for e in entries.flatten() {
+            let dir = e.path();
+            if !dir.is_dir() || dir.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
+                continue;
+            }
+            let category = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            if let Ok(inner) = std::fs::read_dir(&dir) {
+                for f in inner.flatten() {
+                    let p = f.path();
+                    if p.extension().map(|x| x == "md").unwrap_or(false) {
+                        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        let content = std::fs::read_to_string(&p).unwrap_or_default();
+                        /* 填写状态：有效行数（非空、非注释）超过阈值算「已沉淀经验」 */
+                        let real_lines = content.lines().filter(|l| {
+                            let t = l.trim();
+                            !t.is_empty() && !t.starts_with("<!--") && !t.contains("To be filled") && !t.contains("To fill")
+                        }).count();
+                        let rel_path = format!("{}/{}", category, name);
+                        specs.push(SpecOut {
+                            path: rel_path,
+                            name: if name == "index.md" { category.clone() } else { name.trim_end_matches(".md").to_string() },
+                            category: category.clone(),
+                            filled: real_lines >= 40,
+                            line_count: real_lines,
+                            referenced_by: 0,
+                            content,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    specs.sort_by(|a, b| a.category.cmp(&b.category).then(a.path.cmp(&b.path)));
+    Ok(specs)
+}
+
+// prd 显式跨任务引用（官方 FAQ Q25）：被引用的任务 → 引用它的任务列表。
+// 只统计指向「本项目存在任务」的引用，避免悬空路径。
+fn compute_prd_groups(relations: &[TaskRelation]) -> Vec<PrdGroup> {
+    let valid_ids: std::collections::HashSet<&str> =
+        relations.iter().map(|t| t.id.as_str()).collect();
+    let mut ref_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for t in relations {
+        for ref_id in &t.prd_refs {
+            if valid_ids.contains(ref_id.as_str()) && ref_id != &t.id {
+                ref_map.entry(ref_id.clone()).or_default().push(t.id.clone());
+            }
+        }
+    }
+    ref_map
+        .into_iter()
+        .map(|(ref_task_id, task_ids)| PrdGroup { ref_task_id, task_ids })
+        .collect()
+}
+
+// 共享地盘：被 ≥2 个任务引用的 spec（path → 引用任务 id 列表）。
+fn compute_spec_groups(relations: &[TaskRelation]) -> Vec<SpecGroup> {
+    let mut ref_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for t in relations {
+        for s in &t.spec_refs {
+            *ref_count.entry(s.clone()).or_insert(0) += 1;
+        }
+    }
+    ref_count
+        .into_iter()
+        .filter(|(_, count)| *count >= 2)
+        .map(|(path, count)| SpecGroup {
+            path: path.clone(),
+            count,
+            task_ids: relations
+                .iter()
+                .filter(|t| t.spec_refs.contains(&path))
+                .map(|t| t.id.clone())
+                .collect(),
+        })
+        .collect()
+}
+
 // 收集任务目录下的所有 markdown：根目录 *.md（含 acceptance-report-*）+ research/*.md
 fn collect_docs(task_dir: &Path) -> Vec<DocOut> {
     const MAX_CHARS: usize = 120_000; // 单文档截断保护
@@ -941,7 +1133,37 @@ fn set_window_mode(app: AppHandle, mode: String) -> Result<(), String> {
     Ok(())
 }
 
+// 临时调整窗口尺寸（关联画布大展开用）；macOS 无边框窗口需先置可调整。
+#[tauri::command]
+fn set_window_size(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or("窗口不存在")?;
+    let position = window.outer_position().ok();
+    if !cfg!(windows) {
+        let _ = window.set_resizable(true);
+    }
+    if let Err(e) = window.set_size(tauri::LogicalSize::new(width, height)) {
+        if !cfg!(windows) {
+            let _ = window.set_resizable(false);
+        }
+        return Err(e.to_string());
+    }
+    if let Some(position) = position {
+        window.set_position(position).map_err(|e| e.to_string())?;
+    }
+    /* macOS 延迟恢复不可调整状态 */
+    let delayed = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(180));
+        if !cfg!(windows) {
+            let _ = delayed.set_resizable(false);
+        }
+    });
+    Ok(())
+}
+
 // 窗口尺寸模型（灵动岛）：胶囊紧凑/展开尺寸。
+// main 合并后 set_window_mode 内联尺寸，此函数仅测试引用（保留断言）。
+#[allow(dead_code)]
 fn window_mode_size(mode: &str) -> (f64, f64) {
     if mode == "capsule" {
         capsule_window_size(false)
@@ -1074,10 +1296,13 @@ pub fn run() {
             list_projects,
             list_tasks,
             list_archived,
+            list_relations,
+            list_specs,
             get_task,
             archive_task,
             set_always_on_top,
             set_window_mode,
+            set_window_size,
             set_capsule_expanded,
             fit_window_height,
             hide_window,
@@ -1231,6 +1456,99 @@ mod tests {
     #[test]
     fn collect_docs_empty_dir() {
         assert!(collect_docs(Path::new("/nonexistent")).is_empty());
+    }
+
+    #[test]
+    fn spec_groups_only_include_specs_shared_by_two_or_more() {
+        let rel = |id: &str, refs: Vec<&str>| TaskRelation {
+            id: id.into(),
+            dir: id.into(),
+            title: id.into(),
+            status: "in_progress".into(),
+            phase: scan::Phase { id: "implement".into(), label: "实现中".into(), warn: false },
+            dev_type: None,
+            scope: None,
+            parent: None,
+            children: Vec::new(),
+            spec_refs: refs.into_iter().map(String::from).collect(),
+            file_refs: Vec::new(),
+            prd_refs: Vec::new(),
+            subtasks: Vec::new(),
+            sessions: Vec::new(),
+            progress: 0.5,
+            kind: "work".into(),
+            archived: false,
+        };
+        let relations = vec![
+            rel("a", vec![".trellis/spec/frontend/index.md"]),
+            rel("b", vec![".trellis/spec/frontend/index.md"]),
+            rel("c", vec!["research/x.md"]), // 私有引用不产生共享
+        ];
+        let groups = compute_spec_groups(&relations);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].path, ".trellis/spec/frontend/index.md");
+        assert_eq!(groups[0].count, 2);
+        assert_eq!(groups[0].task_ids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn spec_groups_empty_when_no_shared_spec() {
+        let rel = |id: &str, refs: Vec<&str>| TaskRelation {
+            id: id.into(),
+            dir: id.into(),
+            title: id.into(),
+            status: "in_progress".into(),
+            phase: scan::Phase { id: "implement".into(), label: "实现中".into(), warn: false },
+            dev_type: None,
+            scope: None,
+            parent: None,
+            children: Vec::new(),
+            spec_refs: refs.into_iter().map(String::from).collect(),
+            file_refs: Vec::new(),
+            prd_refs: Vec::new(),
+            subtasks: Vec::new(),
+            sessions: Vec::new(),
+            progress: 0.5,
+            kind: "work".into(),
+            archived: false,
+        };
+        let relations = vec![
+            rel("a", vec![".trellis/spec/frontend/index.md"]),
+            rel("b", vec![".trellis/spec/backend/x.md"]), // 各引各的，无共享
+        ];
+        assert!(compute_spec_groups(&relations).is_empty());
+    }
+
+    #[test]
+    fn prd_groups_only_include_existing_task_refs() {
+        let rel = |id: &str, prd_refs: Vec<&str>| TaskRelation {
+            id: id.into(),
+            dir: id.into(),
+            title: id.into(),
+            status: "in_progress".into(),
+            phase: scan::Phase { id: "implement".into(), label: "实现中".into(), warn: false },
+            dev_type: None,
+            scope: None,
+            parent: None,
+            children: Vec::new(),
+            spec_refs: Vec::new(),
+            file_refs: Vec::new(),
+            prd_refs: prd_refs.into_iter().map(String::from).collect(),
+            subtasks: Vec::new(),
+            sessions: Vec::new(),
+            progress: 0.5,
+            kind: "work".into(),
+            archived: false,
+        };
+        let relations = vec![
+            rel("a", vec!["b", "ghost"]), // 引 b（存在）+ ghost（不存在，应过滤）
+            rel("b", vec![]),
+            rel("c", vec!["b"]), // 也引 b → b 被 2 个任务引用
+        ];
+        let groups = compute_prd_groups(&relations);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].ref_task_id, "b");
+        assert_eq!(groups[0].task_ids, vec!["a", "c"]);
     }
 
     #[test]

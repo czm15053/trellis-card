@@ -288,6 +288,9 @@ mod tests {
             sessions: Vec::new(),
             excerpt: String::new(),
             artifacts: Artifacts::default(),
+            spec_refs: Vec::new(),
+            file_refs: Vec::new(),
+            prd_refs: Vec::new(),
             phase: Phase {
                 id: "explore".into(),
                 label: "规划".into(),

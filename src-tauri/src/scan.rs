@@ -74,6 +74,12 @@ pub struct Task {
     pub excerpt: String,
     // 任务目录产物清单（供翻面背面展示与 phase 推断）
     pub artifacts: Artifacts,
+    // 该任务在 implement.jsonl / check.jsonl 中引用的共享 spec 文件（去重）
+    pub spec_refs: Vec<String>,
+    // 该任务 jsonl 引用的全部文件（spec / 决策文档 / docs / 源码，去重）——同文件关联素材
+    pub file_refs: Vec<String>,
+    // 该任务 prd.md 显式引用的其它任务目录名（官方 FAQ Q25 跨任务引用，去重）
+    pub prd_refs: Vec<String>,
     // 细粒度工作流阶段（比 lane 更精确：规划内部还分 1.0-1.5）
     pub phase: Phase,
     pub dir: String,
@@ -123,6 +129,79 @@ fn count_jsonl_entries(path: &Path) -> usize {
                 .count()
         })
         .unwrap_or(0)
+}
+
+// 判定一个 file 引用是否为共享 spec（.trellis/spec/ 或 spec/ 路径）。
+// research/ 等任务私有路径返回 false，不计入共享 spec 聚类。
+fn is_spec_ref(p: &str) -> bool {
+    let norm = p.replace('\\', "/");
+    norm.starts_with(".trellis/spec/") || norm.starts_with("spec/") || norm.contains("/spec/")
+}
+
+// 解析 jsonl 中引用的共享 spec 文件路径（去重、保持顺序）。
+// 容错规则与 count_jsonl_entries 一致：跳过 seed 行（_example 键）、跳过空 file、容错损坏行。
+fn collect_spec_refs(path: &Path) -> Vec<String> {
+    collect_file_refs(path, is_spec_ref)
+}
+
+// 解析 jsonl 中引用的全部文件路径（去重、保持顺序），可选 filter 限定子集。
+// 与 collect_spec_refs 的差异：不过滤路径类型，采集 jsonl 里所有 file 引用
+// （spec / 决策文档 .workflow/ / docs 分析 / 源码文件），供关联视图做「同文件
+// 关联」——真实数据里决策文档（如 .workflow/.analysis/*/CONFIRMED-DECISIONS.md）
+// 被多个任务共享，是比 spec 引用更强的内容关联信号。
+fn collect_file_refs<F: Fn(&str) -> bool>(path: &Path, filter: F) -> Vec<String> {
+    fs::read_to_string(path)
+        .map(|content| {
+            let mut seen = std::collections::HashSet::new();
+            content
+                .lines()
+                .filter_map(|line| {
+                    let t = line.trim();
+                    if t.is_empty() {
+                        return None;
+                    }
+                    serde_json::from_str::<serde_json::Value>(t)
+                        .ok()
+                        .and_then(|v| v.get("file").cloned())
+                        .and_then(|f| f.as_str().map(|s| s.to_string()))
+                        .filter(|s| !s.is_empty() && filter(s))
+                })
+                .filter(|s| seen.insert(s.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// 解析 prd.md 里的跨任务引用：形如 .trellis/tasks/<task-dir>/ 的路径。
+// 官方 FAQ Q25 认可「任务 B 的 prd.md 可显式引用任务 A 的 prd.md / research/」，
+// 这是官方定义的跨任务内容关联机制。返回被引用任务的目录名（去重）。
+fn collect_prd_refs(task_dir: &Path) -> Vec<String> {
+    let prd_path = task_dir.join("prd.md");
+    fs::read_to_string(prd_path)
+        .map(|content| {
+            let mut seen = std::collections::HashSet::new();
+            content
+                .split('\n')
+                .filter_map(|line| {
+                    let norm = line.replace('\\', "/");
+                    // 匹配 .trellis/tasks/<id>/（含 Windows 反斜杠归一化）
+                    let marker = ".trellis/tasks/";
+                    let idx = norm.find(marker)?;
+                    let rest = &norm[idx + marker.len()..];
+                    let id = rest.split(['/', ' ', '`', ')', '"', '\'']).next()?;
+                    if id.is_empty() || id == "archive" {
+                        return None;
+                    }
+                    let id = id.to_string();
+                    if seen.insert(id.clone()) {
+                        Some(id)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn count_md_in_dir(dir: &Path) -> usize {
@@ -411,9 +490,11 @@ struct TaskLocation<'a> {
     archived: bool,
 }
 
-// 归一化 + 计算字段（progress/stage/lane/kind/sessions/excerpt/artifacts/phase）
+// 归一化 + 计算字段（progress/stage/lane/kind/sessions/excerpt/artifacts/phase/spec_refs）
 // rel_dir：任务目录相对 .trellis/tasks/ 的路径（归档任务形如 archive/2026-08/<id>，活跃任务为 <id>）
 // archived：任务是否位于 archive/ 下
+// 内部私有构造函数，各字段职责单一（对应 task.json 各来源），允许参数略多。
+#[allow(clippy::too_many_arguments)]
 fn build_task(
     dir_name: &str,
     raw: RawTask,
@@ -421,6 +502,9 @@ fn build_task(
     sessions: Vec<SessionInfo>,
     excerpt: String,
     artifacts: Artifacts,
+    spec_refs: Vec<String>,
+    file_refs: Vec<String>,
+    prd_refs: Vec<String>,
     location: TaskLocation<'_>,
 ) -> Task {
     let status = raw.status.clone().unwrap_or_else(|| "planning".into());
@@ -452,6 +536,9 @@ fn build_task(
         sessions,
         excerpt,
         artifacts,
+        spec_refs,
+        file_refs,
+        prd_refs,
         phase,
         dir: location.rel_dir.to_string(),
     }
@@ -614,6 +701,33 @@ fn scan_task_dir(
     };
     let excerpt = prd_excerpt(&task_path.join("prd.md"), 400);
     let artifacts = scan_artifacts(task_path);
+    // 共享 spec 引用：implement.jsonl + check.jsonl 的并集，跨文件去重，仅 spec/ 路径计入。
+    let spec_refs = {
+        let mut seen = std::collections::HashSet::new();
+        [
+            task_path.join("implement.jsonl"),
+            task_path.join("check.jsonl"),
+        ]
+        .iter()
+        .flat_map(|p| collect_spec_refs(p))
+        .filter(|s| seen.insert(s.clone()))
+        .collect::<Vec<_>>()
+    };
+    // jsonl 全部文件引用（不限 spec）：spec / 决策文档 / docs / 源码，
+    // 供关联视图做「同文件关联」（真实数据里决策文档被多任务共享是强信号）。
+    let file_refs = {
+        let mut seen = std::collections::HashSet::new();
+        [
+            task_path.join("implement.jsonl"),
+            task_path.join("check.jsonl"),
+        ]
+        .iter()
+        .flat_map(|p| collect_file_refs(p, |_| true))
+        .filter(|s| seen.insert(s.clone()))
+        .collect::<Vec<_>>()
+    };
+    // prd 显式跨任务引用：prd.md 里 .trellis/tasks/<id>/ 路径（官方 FAQ Q25）。
+    let prd_refs = collect_prd_refs(task_path);
     tasks.push(build_task(
         dir_name,
         raw,
@@ -621,6 +735,9 @@ fn scan_task_dir(
         task_sessions,
         excerpt,
         artifacts,
+        spec_refs,
+        file_refs,
+        prd_refs,
         TaskLocation { rel_dir, archived },
     ));
 }
@@ -969,6 +1086,85 @@ mod tests {
         .unwrap();
         assert_eq!(count_jsonl_entries(&p), 2);
         let _ = fs::remove_file(&p);
+    }
+
+    #[test]
+    fn spec_refs_only_include_spec_paths() {
+        let p = std::env::temp_dir().join(format!(
+            "trellis-card-spec-refs-{}.jsonl",
+            std::process::id()
+        ));
+        fs::write(
+            &p,
+            r#"{"_example": "Fill with file/reason..."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "x"}
+{"file": "spec/backend/rules.md", "reason": "y"}
+{"file": "research/explore.md", "reason": "z"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "dup"}
+{bad json"#,
+        )
+        .unwrap();
+        // 只认 spec/ 路径；research/ 排除；重复去重；seed/损坏行跳过
+        let refs = collect_spec_refs(&p);
+        assert_eq!(
+            refs,
+            vec![".trellis/spec/frontend/index.md", "spec/backend/rules.md"]
+        );
+        let _ = fs::remove_file(&p);
+    }
+
+    #[test]
+    fn collect_spec_refs_handles_missing_and_empty() {
+        let missing = std::env::temp_dir().join(format!(
+            "trellis-card-spec-missing-{}.jsonl",
+            std::process::id()
+        ));
+        assert!(collect_spec_refs(&missing).is_empty());
+
+        let empty = std::env::temp_dir().join(format!(
+            "trellis-card-spec-empty-{}.jsonl",
+            std::process::id()
+        ));
+        fs::write(&empty, "").unwrap();
+        assert!(collect_spec_refs(&empty).is_empty());
+        let _ = fs::remove_file(&empty);
+    }
+
+    #[test]
+    fn task_spec_refs_collected_from_both_jsonl() {
+        let root =
+            std::env::temp_dir().join(format!("trellis-card-spec-task-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let proj = root.join("proj");
+        let t = proj.join(".trellis/tasks/01-refs");
+        fs::create_dir_all(&t).unwrap();
+        fs::write(
+            t.join("task.json"),
+            r#"{"id":"01-refs","status":"in_progress"}"#,
+        )
+        .unwrap();
+        // implement.jsonl 引 spec + research；check.jsonl 引同一 spec → 并集去重
+        fs::write(
+            t.join("implement.jsonl"),
+            "{\"file\": \".trellis/spec/frontend/index.md\"}\n{\"file\": \"research/a.md\"}\n",
+        )
+        .unwrap();
+        fs::write(
+            t.join("check.jsonl"),
+            "{\"file\": \".trellis/spec/frontend/index.md\"}\n{\"file\": \".trellis/spec/backend/x.md\"}\n",
+        )
+        .unwrap();
+        let (tasks, _) = scan_tasks(&proj);
+        let task = tasks.iter().find(|x| x.id == "01-refs").unwrap();
+        // research/ 被排除，重复 spec 去重，两个 jsonl 并集
+        assert_eq!(
+            task.spec_refs,
+            vec![
+                ".trellis/spec/frontend/index.md",
+                ".trellis/spec/backend/x.md"
+            ]
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

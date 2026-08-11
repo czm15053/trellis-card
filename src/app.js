@@ -96,9 +96,16 @@ const state = {
   theme: isThemeId(document.body.dataset.theme) ? document.body.dataset.theme : 'specimen',
   showArchived: false,    // 是否显示已归档任务（用于树列表过滤）
   winHeights: { card: null, back: null, admin: null }, // 各视图缓存窗口高度（切视图秒切，不重测量）
+  relOpen: false,         // 任务关联 sheet 是否展开
+  relationsByProject: {}, // projectName -> list_relations 结果 { tasks, specGroups, prdGroups }
+  relLane: 'all',         // 泳道过滤：all | frontend | backend | test | docs
+  relCenterKey: null,     // 关联图中心任务 key（null = 跟随当前聚焦；点任务卡切换）
+  specsByProject: {},     // projectName -> list_specs 结果（项目规范地图）
+  relView: 'tasks',       // 关联视图模式：'tasks' 任务看板 | 'links' 关联网络 | 'specs' 项目规范
 };
 let indexedTasks = [];    // 树列表当前可见扁平顺序（数字键 1-9 用，收起子项不计入）
 let treeCollapsed = new Set();  // 已收起父节点的稳定 key（'项目::任务id'），跨渲染保留
+let relCollapsed = new Set();   // 关联看板大任务组的折叠 key（跨渲染保留）
 let lastFocusKey = null;  // 上次渲染的聚焦（切换动画用）
 let entered = false;      // 卡片是否已完成首次进入动画
 
@@ -275,6 +282,8 @@ function loadPrefs() {
     if (typeof p.focusKey === 'string') state.focusKey = p.focusKey;
     if (typeof p.filter === 'string') state.filter = p.filter;
     if (typeof p.treeOpen === 'boolean') state.treeOpen = p.treeOpen;
+    if (typeof p.relOpen === 'boolean') state.relOpen = p.relOpen;
+    if (typeof p.relLane === 'string') state.relLane = p.relLane;
     if (typeof p.alwaysOnTop === 'boolean') state.alwaysOnTop = p.alwaysOnTop;
     /* 缺失或损坏时回退到 true，不影响现有用户 */
     if (typeof p.autoFollowImportant === 'boolean') state.autoFollowImportant = p.autoFollowImportant;
@@ -296,7 +305,8 @@ function savePrefs() {
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify({
       focusKey: state.focusKey, filter: state.filter,
-      treeOpen: state.treeOpen, alwaysOnTop: state.alwaysOnTop,
+      treeOpen: state.treeOpen, relOpen: state.relOpen, relLane: state.relLane,
+      alwaysOnTop: state.alwaysOnTop,
       autoFollowImportant: state.autoFollowImportant, theme: state.theme,
       showArchived: state.showArchived,
       winHeights: state.winHeights,
@@ -880,9 +890,26 @@ async function refresh(force = false, includeRuntime = true) {
         archivedTasks: (old && old.archivedTasks) || [],
       };
     }
+    /* 关联视图数据：与任务扫描同步拉取（独立命令，独立 version 语义），
+       失败不阻断主流程（关联视图降级为空）。 */
+    try {
+      const rel = await call('list_relations', { project: p.path });
+      state.relationsByProject[p.name] = rel || { tasks: [], specGroups: [] };
+    } catch (e) {
+      report('list_relations', e);
+      state.relationsByProject[p.name] = { tasks: [], specGroups: [] };
+    }
+    /* 项目规范地图：trellis-update-spec 沉淀的团队知识资产 */
+    try {
+      const specs = await call('list_specs', { project: p.path });
+      state.specsByProject[p.name] = specs || [];
+    } catch (e) {
+      report('list_specs', e);
+      state.specsByProject[p.name] = [];
+    }
   }
   for (const n of Object.keys(state.tasksByProject)) {
-    if (!seen.has(n)) { delete state.tasksByProject[n]; changed = true; }
+    if (!seen.has(n)) { delete state.tasksByProject[n]; delete state.relationsByProject[n]; changed = true; }
   }
   if (state.filter && !state.projects.some(p => p.name === state.filter)) state.filter = null;
   /* runtime 数据由后端事件（agent-state-changed / focus-task-changed）或 10s reconcile 推送。
@@ -1021,6 +1048,7 @@ function render() {
   const projectActivity = projectActivityFallback(t);
   renderCard(t, projectActivity);
   renderTree(t);
+  renderRelations(t);
   renderCapsule(t, projectActivity);
   renderAdmin();
   syncTools();
@@ -1028,6 +1056,8 @@ function render() {
   /* sheet 无障碍语义：展开/收起同步 aria-hidden */
   const listSheet = $('list');
   if (listSheet) listSheet.setAttribute('aria-hidden', String(!state.treeOpen));
+  const relSheet = $('relations');
+  if (relSheet) relSheet.setAttribute('aria-hidden', String(!state.relOpen));
   const adminSheet = $('admin');
   if (adminSheet) adminSheet.setAttribute('aria-hidden', String(!state.adminOpen));
 }
@@ -1539,7 +1569,12 @@ function syncFit() {
   /* fit 模式下 world 高度为 auto，让窗口跟随内容高度。
      设置面板（adminOpen）也参与自适应：内容高于当前窗口时拉伸窗口，
      而不是在固定窗口内内部滚动。翻面 / 任务树仍保持固定窗口几何。 */
-  const fit = state.mode === 'card' && !state.flipped && !state.treeOpen;
+  /* relOpen 参与 fit：让 body/world 高度跟随内容（world=auto），避免 body 固定在
+     viewport 高度导致 world 下方留大片透明空白；窗口实际高度由 scheduleWindowFit
+     的 relOpen 分支单独算（内容高度）。与 adminOpen 的 fit 处理一致。 */
+  /* rel-canvas（关联大画布）：world 保持窗口满高（不 fit），sheet 用 CSS 铺满；
+     relOpen 非画布模式才参与 fit（world 跟随内容）。 */
+  const fit = state.mode === 'card' && !state.flipped && !state.treeOpen && !document.body.classList.contains('rel-canvas');
   document.body.classList.toggle('fit', fit);
   /* fit 退出时清掉上一次写入的显式舞台高度，避免任务树 / 详情页继承正面卡片尺寸。 */
   if (!fit) {
@@ -1612,6 +1647,27 @@ function scheduleWindowFit() {
       const panelHeight = Math.max(admin.getBoundingClientRect().height, headerHeight + body.scrollHeight);
       h = Math.min(
         Math.max(IDLE_WINDOW_HEIGHT, Math.ceil(panelHeight) + 4),
+        Math.floor(screen.availHeight * 0.92),
+      );
+    } else if (state.relOpen) {
+      /* 关联大画布：窗口已放大，world 保持窗口满高，不在此处对齐内容。 */
+      if (document.body.classList.contains('rel-canvas')) {
+        world.style.height = '';
+        world.style.maxHeight = '';
+        return;
+      }
+      /* 关联视图：sheet 是绝对定位浮层（bottom:0），高度限制在窗口内（CSS max-height），
+         body 内部滚动。窗口只需对齐到「sheet 高度 + 上方区域」，无需让 sheet 无限高。 */
+      const rel = $('relations');
+      const body = $('relationsBody');
+      if (!rel || !body) { world.style.maxHeight = ''; return; }
+      /* 不设 inline max-height：sheet 用 CSS max-height（窗口内），body 内部滚动 */
+      const sheetTop = rel.getBoundingClientRect().top;
+      const cardTop = card.getBoundingClientRect().top;
+      const aboveSheet = Math.max(0, sheetTop - cardTop);
+      const sheetH = rel.getBoundingClientRect().height;
+      h = Math.min(
+        Math.max(IDLE_WINDOW_HEIGHT, Math.ceil(aboveSheet + sheetH) + 8),
         Math.floor(screen.availHeight * 0.92),
       );
     } else {
@@ -1738,6 +1794,7 @@ function openUnreadActivity() {
     state.prdCache = null;
     state.docSel = null;
     state.treeOpen = false;
+    state.relOpen = false;
     state.adminOpen = false;
     acknowledgeUnreadEvidence(evidence.entry);
   } else {
@@ -2124,6 +2181,372 @@ function collectAncestors(task, byId) {
   }
   return chain;
 }
+
+/* ---------- 任务关联视图 ----------
+   融合三种任务关联：
+   - 共享 spec 聚类（specGroups：被 ≥2 活跃任务引用的 spec）
+   - 属性泳道过滤（dev_type）
+   - 父子树骨架（复用 buildTree 层级，节点带 dev 徽章 + spec chip） */
+function devTypeLabel(v) {
+  const map = { frontend: '前端', backend: '后端', fullstack: '全栈', test: '测试', docs: '文档' };
+  return map[v] || v;
+}
+const REL_LANES = [
+  { key: 'all', label: '全部' },
+  { key: 'frontend', label: '前端' },
+  { key: 'backend', label: '后端' },
+  { key: 'test', label: '测试' },
+  { key: 'docs', label: '文档' },
+];
+/* 泳道过滤：只保留 dev_type === lane 的任务（含子任务中匹配的） */
+function relLaneFiltered(relTasks) {
+  if (state.relLane === 'all') return relTasks;
+  return relTasks.filter(t => t.devType === state.relLane);
+}
+/* 共享 spec 颜色：同一 spec 固定一色，保证同族一致 */
+const REL_SPEC_COLORS = ['#8b7cf6', '#f0a35e', '#45c4a0', '#4aa3ff', '#f07178'];
+function specColorIndex(path) {
+  let h = 0;
+  for (const c of path) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return h % REL_SPEC_COLORS.length;
+}
+function renderRelations(focused) {
+  const sheet = $('relations');
+  if (!sheet) return;
+  sheet.classList.toggle('open', !!state.relOpen);
+  const lanes = $('relationsLanes');
+  const body = $('relationsBody');
+  if (!lanes || !body) return;
+
+  /* 顶部 tab：两行——第一行视图切换（任务/关联/规范），第二行项目 tab */
+  const REL_VIEWS = [
+    { key: 'tasks', label: '任务' },
+    { key: 'links', label: '关联' },
+    { key: 'specs', label: '规范' },
+  ];
+  const VIEW_HINT = {
+    tasks: '任务状态 · 进度 · 待办 · 活跃会话',
+    links: '任务间共享同一决策/分析文档 = 同族关联',
+    specs: '项目沉淀的通用规范（trellis-update-spec）',
+  };
+  lanes.innerHTML =
+    `<div class="lanes-row">` +
+    REL_VIEWS.map(v =>
+      `<button type="button" class="lane-chip view${state.relView === v.key ? ' on' : ''}" data-view="${v.key}">${v.label}</button>`
+    ).join('') +
+    `</div><div class="lanes-row">` +
+    [null, ...state.projects.map(p => p.name)].map(name =>
+      `<button type="button" class="lane-chip${state.filter === name ? ' on' : ''}" data-proj="${esc(name || '')}">${name ? esc(name) : '全部'}</button>`
+    ).join('') +
+    `</div><div class="lanes-hint">${esc(VIEW_HINT[state.relView] || '')}</div>`;
+  lanes.querySelectorAll('.lane-chip[data-view]').forEach(btn => {
+    btn.onclick = () => {
+      state.relView = btn.dataset.view;
+      render();
+    };
+  });
+  lanes.querySelectorAll('.lane-chip[data-proj]').forEach(btn => {
+    btn.onclick = () => {
+      state.filter = btn.dataset.proj || null;
+      render();
+    };
+  });
+
+  /* 收集所有项目的关联任务（含项目名标注），支持当前项目筛选 */
+  const names = state.filter ? [state.filter] : state.projects.map(p => p.name);
+  let allTasks = [];
+  const allSpecGroups = [];
+  for (const name of names) {
+    const rel = state.relationsByProject[name];
+    if (!rel) continue;
+    for (const t of rel.tasks || []) allTasks.push({ ...t, project: name });
+    for (const g of rel.specGroups || []) allSpecGroups.push({ ...g, project: name });
+  }
+  /* 泳道过滤（关联数据里 devType 是后端透出的原始值） */
+  const filtered = relLaneFiltered(allTasks);
+
+  /* ---------- 任务看板：批次分组 + 任务卡片 ----------
+     以「一眼看到所有任务的状态/进度/待办」为目标，不用连线图。
+     分组：父任务（有 children）= 批次组，子任务在组内；独立任务单列。 */
+  let html = '';
+  let relCount = filtered.length;   /* 顶部计数，按视图更新 */
+  const dirName = (t) => String(t.dir || t.id).split('/').pop();
+  const findTask = (dir, proj) => allTasks.find(t => t.project === proj && dirName(t) === dir);
+  /* 共享文件价值判定：决策文档 .workflow/、源码、任务文档是强关联；spec/docs 索引是弱信号 */
+  const isStrongSharedFile = (p) => {
+    const n = String(p || '').replace(/\\/g, '/');
+    if (n.includes('.workflow/')) return true;
+    if (n.includes('.trellis/tasks/')) return true;
+    if (/\.(java|ts|js|tsx|jsx|py|go|rs|kt|swift|c|cpp|h)$/.test(n)) return true;
+    return false;
+  };
+  const card = (t) => {
+    const subs = t.subtasks || [];
+    const doneN = subs.filter(s => s.status === 'completed' || s.status === 'done').length;
+    const statusColor = t.status === 'completed' || t.status === 'done' ? '#45c4a0'
+      : t.status === 'in_progress' ? '#f0a35e'
+      : t.status === 'blocked' || t.status === 'failed' ? '#f07178'
+      : t.status === 'planning' ? '#8b7cf6' : '#63656e';
+    const pct = Math.round((t.progress || 0) * 100);
+    const rt = state.runtimeByTask.get(keyOf(t));
+    const active = rt && rt.agent && rt.agent.state && rt.agent.state !== 'none' && rt.agent.state !== 'idle';
+    const editing = (rt && rt.agent && rt.agent.toolInput && rt.agent.toolInput.filePath) || '';
+    const editShort = editing ? editing.split('/').pop() : '';
+    const lastTs = (rt && rt.lastChangedAt) ? rt.lastChangedAt * 1000
+      : (t.mtime && t.mtime > 100_000_000_000 ? t.mtime : (t.mtime || 0) * 1000);
+    const relTimeStr = lastTs ? relTime(lastTs) || '' : '';
+    /* 会话协作：同一任务被多个 AI session 处理（after_finish 语义，跨会话协作） */
+    const sessCount = (t.sessions || []).length;
+    return `<button type="button" class="rel-board-card${t.archived ? ' archived' : ''}${active ? ' live' : ''}" data-key="${esc(keyOf(t))}" style="--bc:${statusColor}">
+      <span class="rel-board-title">${active ? '<span class="live-dot" title="有活跃会话"></span>' : ''}${esc((t.title || t.id).slice(0, 34))}</span>
+      <span class="rel-board-meta">
+        <span class="rel-board-status">${esc((t.phase && t.phase.label) || t.status || '')}</span>
+        ${state.projects.length > 1 && t.project ? `<span class="rel-board-proj">${esc(t.project)}</span>` : ''}
+        ${sessCount > 1 ? `<span class="rel-board-sess" title="${sessCount} 个 AI 会话处理过此任务">${sessCount} 会话</span>` : ''}
+        ${t.phase && t.phase.warn ? '<span class="rel-board-warn">需规范</span>' : ''}
+        ${editShort ? `<span class="rel-board-file" title="${esc(editing)}">编辑 ${esc(editShort)}</span>` : ''}
+        ${subs.length ? `<span class="rel-board-todo">待办 ${doneN}/${subs.length}</span>` : ''}
+        ${t.devType ? `<span class="rel-board-dev">${esc(devTypeLabel(t.devType))}</span>` : ''}
+        ${t.archived ? '<span class="rel-board-arch">已归档</span>' : ''}
+        ${relTimeStr ? `<span class="rel-board-time">${esc(relTimeStr)}</span>` : ''}
+        <span class="rel-board-pct">${pct}%</span>
+      </span>
+      <span class="rel-board-bar"><i style="width:${pct}%;background:${statusColor}"></i></span>
+    </button>`;
+  };
+
+  /* ---------- 视图：规范地图 ---------- */
+  if (state.relView === 'specs') {
+    const specNames = state.filter ? [state.filter] : state.projects.map(p => p.name);
+    const specMap = new Map();
+    for (const name of specNames) {
+      for (const s of (state.specsByProject[name] || [])) specMap.set(`${name}::${s.path}`, s);
+    }
+    relCount = specMap.size;
+    if (!specMap.size) {
+      html += `<div class="tree-empty">暂无项目规范</div>`;
+    } else {
+      const specCollapsed = relCollapsed.has('__specs__');
+      /* 每个 spec 被多少任务引用（specRefs 交集），体现规范的实际使用 */
+      const refCount = new Map();
+      for (const t of allTasks) {
+        for (const r of (t.specRefs || [])) refCount.set(r, (refCount.get(r) || 0) + 1);
+      }
+      const specCard = (s) => `<details class="rel-spec-item${s.filled ? ' filled' : ''}"${s.filled ? ' open' : ''}>
+        <summary>
+          <span class="rel-spec-name" title="${esc(s.path)}">${esc(s.name)}</span>
+          <span class="rel-spec-meta">
+            <span class="rel-spec-cat">${esc(s.category)}</span>
+            <span class="rel-spec-status">${s.filled ? '✓ 已沉淀' : '○ 空模板'}</span>
+            <span class="rel-spec-lines">${s.lineCount} 行</span>
+            ${refCount.get(s.path) ? `<span class="rel-spec-refs">${refCount.get(s.path)} 任务用</span>` : ''}
+          </span>
+        </summary>
+        <div class="rel-spec-body">${s.content ? mdRender(s.content) : '<span class="dim">（空）</span>'}</div>
+      </details>`;
+      const allSpecs = [...specMap.values()];
+      const filledSpecs = allSpecs.filter(s => s.filled);
+      const emptySpecs = allSpecs.filter(s => !s.filled);
+      html += `<div class="rel-board-group">
+        <div class="rel-board-group-h rel-board-group-toggle" data-group="__specs__" title="展开/收起">
+          <span class="rel-board-caret">${specCollapsed ? '▸' : '▾'}</span>
+          <span class="rel-board-group-dot" style="background:#4aa3ff"></span>
+          <span class="rel-board-group-name">项目规范</span>
+          <span class="rel-board-group-count">已沉淀 ${filledSpecs.length} · 空 ${emptySpecs.length}</span>
+        </div>
+        ${specCollapsed ? '' : `
+          ${filledSpecs.length ? `<div class="rel-spec-sub-label">已沉淀规范（${filledSpecs.length}）</div><div class="rel-spec-grid">${filledSpecs.map(specCard).join('')}</div>` : ''}
+          ${emptySpecs.length ? `<details class="rel-spec-empty-group"><summary>空模板规范（${emptySpecs.length}）▸</summary><div class="rel-spec-grid">${emptySpecs.map(specCard).join('')}</div></details>` : ''}
+        `}
+      </div>`;
+    }
+  }
+
+  /* ---------- 视图：关联网络 ---------- */
+  else if (state.relView === 'links') {
+    /* 中心任务详情：选中的任务 + 它的关联 */
+    const centerTask = state.relCenterKey && allTasks.find(t => keyOf(t) === state.relCenterKey);
+    if (centerTask) {
+      const cKey = keyOf(centerTask);
+      const centerRefs = new Set(centerTask.fileRefs || []);
+      const sharedTasks = allTasks.filter(t => {
+        if (keyOf(t) === cKey || t.project !== centerTask.project) return false;
+        return (t.fileRefs || []).some(r => centerRefs.has(r) && isStrongSharedFile(r));
+      });
+      const parent = centerTask.parent ? findTask(centerTask.parent, centerTask.project) : null;
+      const children = (centerTask.children || []).map(c => findTask(c, centerTask.project)).filter(Boolean);
+      const siblings = parent ? (parent.children || []).map(c => findTask(c, parent.project)).filter(t => t && keyOf(t) !== cKey) : [];
+      const batchTasks = [...(parent ? [parent] : []), ...siblings, ...children].filter(Boolean);
+      html += `<div class="rel-link-panel">
+        <div class="rel-link-h">
+          <span class="rel-link-title">「${esc((centerTask.title || centerTask.id).slice(0, 30))}」的关联</span>
+          <button type="button" class="rel-link-close" data-clear-center>×</button>
+        </div>
+        ${batchTasks.length ? `<div class="rel-link-row"><span class="rel-link-label">同批次</span>${batchTasks.map(t =>
+          `<button type="button" class="rel-link-chip" data-key="${esc(keyOf(t))}">${esc((t.title || t.id).slice(0, 18))}</button>`).join('')}</div>` : ''}
+        ${sharedTasks.length ? `<div class="rel-link-row"><span class="rel-link-label">共享文件</span>${sharedTasks.map(t =>
+          `<button type="button" class="rel-link-chip" data-key="${esc(keyOf(t))}">${esc((t.title || t.id).slice(0, 18))}</button>`).join('')}</div>` : ''}
+        ${!batchTasks.length && !sharedTasks.length ? '<div class="rel-link-row dim">该任务暂无关联</div>' : ''}
+      </div>`;
+    }
+    /* 关联视图只展示「共享文件」关联（父子已在任务视图展示，不重复）。
+       共享文件 = 多个任务引用同一决策/分析/文档，Map 按「项目::文件」聚合天然去重。 */
+    const sharedMap = new Map();
+    for (const t of filtered) {
+      for (const r of (t.fileRefs || [])) {
+        if (!isStrongSharedFile(r)) continue;
+        const key = `${t.project}::${r}`;
+        if (!sharedMap.has(key)) sharedMap.set(key, { ref: r, members: [] });
+        sharedMap.get(key).members.push(t);
+      }
+    }
+    const sharedGroups = [...sharedMap.values()].filter(g => g.members.length >= 2);
+    /* 计数：共享关联涉及的去重任务数 */
+    const linkedTaskSet = new Set();
+    for (const g of sharedGroups) for (const m of g.members) linkedTaskSet.add(keyOf(m));
+    relCount = linkedTaskSet.size;
+    if (!sharedGroups.length) {
+      html += `<div class="tree-empty">暂无共享文件关联（任务间没有共同引用的决策/分析文档）</div>`;
+    } else {
+      for (const g of sharedGroups) {
+        const col = REL_SPEC_COLORS[specColorIndex(g.ref)];
+        const refName = g.ref.split('/').pop();
+        /* 文件类型：决策/分析/设计/任务文档/其他，让组头更有信息量 */
+        const typeLabel = g.ref.includes('.workflow/.analysis/') ? '决策'
+          : g.ref.includes('.workflow/.team/') ? '分析'
+          : g.ref.includes('.trellis/tasks/') ? '任务文档'
+          : /\.(md)$/.test(refName) ? '文档'
+          : '文件';
+        html += `<div class="rel-board-group">
+          <div class="rel-board-group-h">
+            <span class="rel-board-group-dot" style="background:${col}"></span>
+            <span class="rel-board-group-name" title="${esc(g.ref)}">共享${typeLabel} · ${esc(refName)}</span>
+            <span class="rel-board-group-count">${g.members.length} 任务</span>
+          </div>
+          <div class="rel-board-cards">${g.members.map(card).join('')}</div>
+        </div>`;
+      }
+    }
+  }
+
+  /* ---------- 视图：任务看板 ---------- */
+  else {
+    const batchParents = filtered.filter(t => (t.children || []).length > 0);
+    const childOf = new Map();
+    for (const bp of filtered) {
+      for (const c of (bp.children || [])) {
+        const child = findTask(c, bp.project);
+        if (child) childOf.set(keyOf(child), bp);
+      }
+    }
+    const batchGroups = batchParents.map(bp => ({ parent: bp, kids: (bp.children || []).map(c => findTask(c, bp.project)).filter(Boolean) }));
+    const inBatch = new Set([...childOf.keys()]);
+    const orphans = filtered.filter(t => !inBatch.has(keyOf(t)) && (t.children || []).length === 0);
+    if (!filtered.length) {
+      html += `<div class="tree-empty">暂无任务</div>`;
+    } else {
+      const liveTasks = filtered.filter(t => {
+        const rt = state.runtimeByTask.get(keyOf(t));
+        return rt && rt.agent && rt.agent.state && rt.agent.state !== 'none' && rt.agent.state !== 'idle';
+      });
+      if (liveTasks.length) {
+        html += `<div class="rel-board-group">
+          <div class="rel-board-group-h">
+            <span class="rel-board-group-dot" style="background:#45c4a0"></span>
+            <span class="rel-board-group-name">活跃任务</span>
+            <span class="rel-board-group-count">${liveTasks.length} 正在处理</span>
+          </div>
+          <div class="rel-board-cards">${liveTasks.map(card).join('')}</div>
+        </div>`;
+      }
+      for (const g of batchGroups) {
+        const gKey = keyOf(g.parent);
+        const collapsed = relCollapsed.has(gKey);
+        const pct = Math.round((g.parent.progress || 0) * 100);
+        html += `<div class="rel-board-group">
+          <div class="rel-board-group-h rel-board-group-toggle" data-group="${esc(gKey)}" title="展开/收起">
+            <span class="rel-board-caret">${collapsed ? '▸' : '▾'}</span>
+            <span class="rel-board-group-dot" style="background:${g.parent.archived ? '#63656e' : '#f0a35e'}"></span>
+            <span class="rel-board-group-name" title="${esc(g.parent.title || g.parent.id)}">${esc((g.parent.title || g.parent.id).slice(0, 40))}</span>
+            <span class="rel-board-group-count">${g.kids.length} 子任务 · ${pct}%</span>
+          </div>
+          ${collapsed ? '' : `<div class="rel-board-cards">${g.kids.map(card).join('')}</div>`}
+        </div>`;
+      }
+      if (orphans.length) {
+        /* 排序：活跃 > 进行中 > 待办/卡住 > 已完成/归档（让「现在该关注」的在前面） */
+        const stateRank = (t) => {
+          const rt = state.runtimeByTask.get(keyOf(t));
+          if (rt && rt.agent && rt.agent.state && rt.agent.state !== 'none' && rt.agent.state !== 'idle') return 0;
+          if (t.status === 'in_progress') return 1;
+          if (t.status === 'blocked' || t.status === 'failed') return 2;
+          if (t.status === 'planning' || t.status === 'review') return 3;
+          if (t.status === 'completed' || t.status === 'done') return 4;
+          return 5;
+        };
+        const sorted = orphans.sort((a, b) => stateRank(a) - stateRank(b) || Number(a.archived) - Number(b.archived));
+        html += `<div class="rel-board-group">
+          <div class="rel-board-group-h">
+            <span class="rel-board-group-dot" style="background:#8b7cf6"></span>
+            <span class="rel-board-group-name">独立任务</span>
+            <span class="rel-board-group-count">${sorted.length}</span>
+          </div>
+          <div class="rel-board-cards">${sorted.map(card).join('')}</div>
+        </div>`;
+      }
+    }
+  }
+
+  body.innerHTML = html;
+  $('relationsCount').textContent = String(relCount);
+
+  /* 看板卡片点击：聚焦该任务（显示卡片） */
+  body.querySelectorAll('.rel-board-card').forEach(cardEl => {
+    cardEl.onclick = (e) => {
+      const key = cardEl.dataset.key;
+      const t = allTasks.find(x => keyOf(x) === key);
+      if (!t) return;
+      if (e.shiftKey) { focusTask(t); return; }   /* shift+点 = 聚焦 */
+      if (state.relCenterKey === key) { state.relCenterKey = null; }  /* 再点收起关联 */
+      else state.relCenterKey = key;
+      renderRelations(currentFocus());
+    };
+  });
+  /* 大任务组头点击：折叠/展开 */
+  body.querySelectorAll('.rel-board-group-toggle').forEach(hd => {
+    hd.onclick = () => {
+      const key = hd.dataset.group;
+      if (relCollapsed.has(key)) relCollapsed.delete(key);
+      else relCollapsed.add(key);
+      renderRelations(currentFocus());
+    };
+  });
+  /* 关联面板：chip 点击切换中心（串联浏览）、关闭清空 */
+  body.querySelectorAll('.rel-link-chip').forEach(chip => {
+    chip.onclick = () => {
+      state.relCenterKey = chip.dataset.key;
+      renderRelations(currentFocus());
+    };
+  });
+  body.querySelectorAll('.rel-link-close').forEach(btn => {
+    btn.onclick = () => {
+      state.relCenterKey = null;
+      renderRelations(currentFocus());
+    };
+  });
+  /* 关联网络节点：点设中心（查看详情），shift+点聚焦 */
+  body.querySelectorAll('.rel-link-node').forEach(node => {
+    node.onclick = (e) => {
+      const key = node.dataset.key;
+      const t = allTasks.find(x => keyOf(x) === key);
+      if (!t) return;
+      if (e.shiftKey) { focusTask(t); return; }
+      state.relCenterKey = key;
+      renderRelations(currentFocus());
+    };
+  });
+}
+
 function focusTask(t) {
   state.archiveReceipt = null;
   state.focusKey = keyOf(t);
@@ -2131,7 +2554,13 @@ function focusTask(t) {
   state.focusLockUntil = 0;
   clearRuntimeUnread();
   state.treeOpen = false;
+  state.relOpen = false;
   state.subOpen = null;
+  /* 若从关联画布聚焦：移除画布态并恢复窄窗，让卡片显示聚焦任务 */
+  if (document.body.classList.contains('rel-canvas')) {
+    document.body.classList.remove('rel-canvas');
+    if (hasTauri) call('set_window_size', { width: REL_NORMAL_W, height: REL_NORMAL_H }).catch(() => {});
+  }
   render();
 }
 /* 显式解除锁定：停止手动模式，回到策略决定焦点 */
@@ -2431,6 +2860,9 @@ async function setMode(mode) {
     if (mode === 'capsule') {
       state.themeOpen = false;
       state.menuOpen = false;
+      state.treeOpen = false;
+      state.relOpen = false;
+      state.adminOpen = false;
       const mp = $('menuPop');
       if (mp) mp.hidden = true;
       toggleCapMenu(false);
@@ -2709,6 +3141,7 @@ function toggleTree() {
     if (state.menuOpen) toggleMenu(false);
     closeProjectPop();
     state.adminOpen = false;
+    state.relOpen = false;
     state.flipped = false;   /* 开 sheet 必回正面 */
     state.evidenceTarget = null;
     state.treeOpen = true;
@@ -2728,6 +3161,7 @@ function toggleAdmin() {
     if (state.menuOpen) toggleMenu(false);
     closeProjectPop();
     state.treeOpen = false;
+    state.relOpen = false;
     state.flipped = false;
     state.evidenceTarget = null;
     state.adminOpen = true;
@@ -2751,6 +3185,44 @@ function closeTree() {
 function closeAdmin() {
   if (!state.adminOpen) return;
   state.adminOpen = false;
+  render();
+  restoreFocus();
+}
+/* 关联画布大展开尺寸：突破 380×640 窄窗，接近全屏展示批次树 */
+const REL_CANVAS_W = 940;
+const REL_CANVAS_H = 900;
+const REL_NORMAL_W = 380;
+const REL_NORMAL_H = 640;
+function toggleRelations() {
+  const opening = !state.relOpen;
+  if (opening) {
+    if (state.themeOpen) toggleThemePop(false);
+    if (state.menuOpen) toggleMenu(false);
+    closeProjectPop();
+    state.treeOpen = false;
+    state.adminOpen = false;
+    state.flipped = false;
+    state.evidenceTarget = null;
+    state.relOpen = true;
+    focusReturnTo = $('btnRelations');
+    /* 关联画布：窗口临时放大展示批次树，关闭时恢复窄窗 */
+    if (hasTauri) call('set_window_size', { width: REL_CANVAS_W, height: REL_CANVAS_H }).catch(() => {});
+    document.body.classList.add('rel-canvas');
+    render();
+    setTimeout(() => moveFocusInto($('relations')), 50);
+  } else {
+    state.relOpen = false;
+    document.body.classList.remove('rel-canvas');
+    if (hasTauri) call('set_window_size', { width: REL_NORMAL_W, height: REL_NORMAL_H }).catch(() => {});
+    render();
+    restoreFocus();
+  }
+}
+function closeRelations() {
+  if (!state.relOpen) return;
+  state.relOpen = false;
+  document.body.classList.remove('rel-canvas');
+  if (hasTauri) call('set_window_size', { width: REL_NORMAL_W, height: REL_NORMAL_H }).catch(() => {});
   render();
   restoreFocus();
 }
@@ -3161,12 +3633,14 @@ function bindUI() {
   $('btnStartEmpty').onclick = () => startWithoutProject();
   $('btnRefresh').onclick = () => { toggleMenu(false); manualRefresh(); };
   $('btnTree').onclick = () => { if (state.menuOpen) toggleMenu(false); toggleTree(); };
+  $('btnRelations').onclick = () => { if (state.menuOpen) toggleMenu(false); toggleRelations(); };
   $('btnCapsule').onclick = () => { toggleMenu(false); setMode('capsule'); };
   $('btnAutoFollow').onclick = () => { toggleAutoFollow(); syncMenuChrome(); };
   $('btnTop').onclick = () => { toggleTop().then(() => syncMenuChrome()); };
   $('btnAdmin').onclick = () => { toggleMenu(false); toggleAdmin(); };
   if ($('btnAdminClose')) $('btnAdminClose').onclick = () => closeAdmin();
   if ($('btnTreeClose')) $('btnTreeClose').onclick = () => closeTree();
+  if ($('btnRelationsClose')) $('btnRelationsClose').onclick = () => closeRelations();
   /* 「显示已归档」勾选框：切换后懒加载各项目归档任务，再重渲染任务树 */
   const chkArchived = $('chkShowArchived');
   if (chkArchived) {
@@ -3352,6 +3826,7 @@ function bindUI() {
     if (k === 'Escape') {
       if (state.adminOpen) { closeAdmin(); }
       else if (state.treeOpen) { closeTree(); }
+      else if (state.relOpen) { closeRelations(); }
       else if (state.flipped) { toggleFlip(false); }
       return;
     }

@@ -15,6 +15,8 @@
   --serif:ui-serif,"Iowan Old Style","Songti SC","STSong","Times New Roman",serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","PingFang SC",monospace;
   --radius:22px; --ease:cubic-bezier(.22,1,.36,1);
+  /* 灵动岛展开/收起曲线：Q 弹过冲，避免生硬；收起时轻微过冲形成"吸回"感 */
+  --island-in:cubic-bezier(.16,1.3,.3,1);
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
@@ -802,6 +804,413 @@ body.fit .sheet.settings #adminBody{overflow:auto;flex:1 1 auto;min-height:0}
 .node .tree-archive:hover{color:var(--chalk);background:color-mix(in srgb, var(--chalk) 8%, transparent);border-color:color-mix(in srgb, var(--chalk) 20%, transparent)}
 .node .tree-archive:focus-visible{outline:1px solid color-mix(in srgb,var(--accent,var(--amber)) 70%,transparent);outline-offset:1px}
 .node .tree-archive.busy{opacity:.45;pointer-events:none}
+
+/* ---------- 任务关联视图 ---------- */
+.relations-lanes{
+  display:flex;gap:5px;flex-wrap:wrap;flex-shrink:0;padding:2px 14px 8px;
+}
+.lanes-row{display:flex;gap:5px;flex-wrap:wrap;width:100%}
+.lanes-hint{
+  font-family:var(--mono);font-size:7.5px;color:var(--dim);letter-spacing:.03em;
+  padding:0 4px 4px;opacity:.8;width:100%;
+}
+.lane-sep{width:1px;height:14px;background:var(--line2);flex-shrink:0;margin:0 2px}
+.lane-chip{
+  font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.04em;
+  color:var(--dim);background:transparent;border:1px solid var(--line2);border-radius:99px;
+  padding:3px 10px;cursor:pointer;transition:color .18s,border-color .18s,background .18s;
+}
+.lane-chip:hover{color:var(--chalk);border-color:color-mix(in srgb,var(--chalk) 30%,transparent)}
+.lane-chip.on{color:var(--ink2);background:var(--accent,var(--amber));border-color:transparent}
+.relations-body{flex:1 1 auto;min-height:0;overflow:auto;padding:0 8px 10px}
+/* 关联视图 sheet 高度限制在窗口内（92%），内容超出时 body 内部滚动，
+   滚动条在窗口内可见。scheduleWindowFit 只对齐窗口到 sheet 高度。 */
+#relations{max-height:92%}
+/* 关联画布模式：窗口放大后 sheet 铺满整个画布，专注批次树大画布 */
+body.rel-canvas .card-topbar{opacity:.4}
+body.rel-canvas #relations{
+  position:fixed;top:8px;left:8px;right:8px;bottom:8px;
+  max-height:none;width:auto;height:auto;z-index:50;
+  border-radius:18px;
+}
+.rel-group-title,.rel-tree-title{
+  font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--dim);padding:8px 6px 4px;
+}
+.rel-groups{display:flex;flex-direction:column;gap:6px;padding:0 4px}
+.rel-group{
+  border:1px solid var(--line2);border-left-width:3px;border-radius:11px;padding:7px 10px;
+}
+.rel-group-h{display:flex;align-items:center;gap:6px}
+.rel-group-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.rel-group-name{
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--mono);font-size:10px;font-weight:650;color:var(--chalk);
+}
+.rel-group-count{font-family:var(--mono);font-size:9px;color:var(--dim);flex-shrink:0}
+.rel-group-tasks{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.rel-group-task{
+  font-size:9.5px;color:var(--dim);background:color-mix(in srgb,var(--chalk) 5%,transparent);
+  border:1px solid transparent;border-radius:7px;padding:2px 7px;cursor:pointer;
+  transition:color .15s,border-color .15s,background .15s;
+}
+.rel-group-task:hover{color:var(--chalk);border-color:color-mix(in srgb,var(--chalk) 20%,transparent);background:color-mix(in srgb,var(--chalk) 8%,transparent)}
+.rel-tree{padding-top:2px}
+/* 关联视图树行：独立 3 列 grid（disclosure / 状态点 / 内容），不复用 .node .row 的 6 列
+   （后者含 .idx 等任务树专属列，rel 节点不渲染，缺列会导致 meta2 被塞进 7px 列）。
+   选择器必须带 .node 前缀以压过 .node .row（特异性 0,2,0），否则 6 列模板会覆盖本规则。 */
+/* 关联视图已从「树列表」重构为「关联图」（中心任务 + 关系轨道），
+   不再渲染 .rel-row 树节点；.rel-graph / .rel-center / .rel-track / .rel-card 承载新布局。 */
+/* 内容树（关联视图内）：聚焦任务文档的树形导航 */
+.rel-doc-tree{display:flex;flex-direction:column;gap:2px;padding:0 4px}
+.rel-doc-node{
+  border:1px solid var(--line2);border-radius:9px;overflow:hidden;
+}
+.rel-doc-node summary{
+  display:flex;align-items:center;gap:6px;padding:5px 9px;cursor:pointer;
+  font-family:var(--mono);font-size:9.5px;color:var(--chalk);
+  list-style:none;user-select:none;
+}
+.rel-doc-node summary::-webkit-details-marker{display:none}
+.rel-doc-node summary::before{
+  content:"▸";font-size:9px;color:var(--dim);transition:transform .15s;flex-shrink:0;
+}
+.rel-doc-node[open] summary::before{transform:rotate(90deg)}
+.rel-doc-node summary:hover{background:color-mix(in srgb,var(--chalk) 4%,transparent)}
+.rel-doc-node.on summary{background:color-mix(in srgb,var(--accent,var(--amber)) 10%,transparent)}
+.rel-doc-label{font-weight:700;letter-spacing:.05em}
+.rel-doc-name{
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:8.5px;color:var(--dim);
+}
+.rel-doc-body{
+  padding:6px 10px;border-top:1px solid var(--line2);
+  font-size:11px;line-height:1.5;color:var(--chalk);
+  max-height:280px;overflow:auto;
+}
+.rel-doc-body .doc-section summary{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--dim)}
+
+/* ---------- 关联图（SVG DAG + 中心详情） ---------- */
+.rel-graph{display:block;padding:10px 6px}
+/* 大画布下固定图区高度 + 内部滚动：切换中心时画布高度不跳变（避免「动来动去」） */
+body.rel-canvas .rel-graph{
+  height:calc(100vh - 120px);overflow-y:auto;
+}
+/* 中心节点：当前聚焦任务 */
+.rel-center{
+  border:1px solid color-mix(in srgb,var(--accent,var(--amber)) 40%,var(--line2));
+  border-radius:14px;padding:10px 12px;
+  background:color-mix(in srgb,var(--accent,var(--amber)) 8%,transparent);
+}
+.rel-center-h{display:flex;align-items:center;gap:8px}
+.rel-center-title{
+  font-family:var(--font);font-size:12px;font-weight:700;color:var(--chalk);
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;
+}
+.rel-center-tag{
+  font-family:var(--mono);font-size:8px;color:var(--dim);letter-spacing:.05em;
+  border:1px solid var(--line2);border-radius:4px;padding:1px 5px;flex-shrink:0;
+}
+.rel-center-status{
+  font-family:var(--mono);font-size:9px;color:var(--dim);margin-top:4px;
+  display:flex;gap:10px;flex-wrap:wrap;
+}
+.rel-center-actions{display:flex;gap:6px;margin-top:7px}
+.rel-center-focus,.rel-center-follow{
+  font-size:9px;padding:2px 9px;border-radius:6px;cursor:pointer;
+  border:1px solid var(--line2);background:color-mix(in srgb,var(--chalk) 5%,transparent);
+  color:var(--chalk);transition:.15s;font-family:var(--font);
+}
+.rel-center-focus:hover,.rel-center-follow:hover{
+  border-color:color-mix(in srgb,var(--accent,var(--amber)) 40%,var(--line2));
+  background:color-mix(in srgb,var(--accent,var(--amber)) 10%,transparent);
+}
+/* 关系轨道：一个关联维度一行 */
+.rel-track{display:flex;flex-direction:column;gap:5px}
+.rel-track-label{
+  font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--dim);display:flex;align-items:center;gap:6px;
+}
+.rel-track-label::after{content:"";flex:1;height:1px;background:var(--line2)}
+.rel-track-count{
+  font-family:var(--mono);font-size:8px;color:var(--dim);background:color-mix(in srgb,var(--chalk) 6%,transparent);
+  border-radius:99px;padding:1px 7px;
+}
+/* 轨道内的关系卡 */
+.rel-cards{display:flex;flex-direction:column;gap:5px}
+.rel-card{
+  border:1px solid var(--line2);border-left-width:3px;border-radius:10px;
+  padding:6px 9px;display:flex;align-items:center;gap:8px;
+}
+.rel-card-name{
+  font-family:var(--mono);font-size:9px;font-weight:600;color:var(--chalk);
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;
+}
+.rel-card-tasks{
+  display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;
+}
+.rel-card-task{
+  font-size:8.5px;color:var(--dim);background:color-mix(in srgb,var(--chalk) 5%,transparent);
+  border:1px solid transparent;border-radius:6px;padding:1px 6px;cursor:pointer;
+  transition:.15s;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.rel-card-task:hover{color:var(--chalk);border-color:color-mix(in srgb,var(--chalk) 20%,transparent)}
+/* 空态 */
+.rel-graph-empty{padding:18px 12px;font-size:12px;color:var(--dim);text-align:center}
+
+/* ---------- 树形批次图（竖线连线 + 缩进层级） ---------- */
+.rel-tree-graph{display:flex;flex-direction:column}
+.rel-tnode{position:relative;margin-left:14px;padding-left:10px}
+.rel-tnode::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:1px;
+  background:color-mix(in srgb,var(--lc,#8b7cf6) 40%,var(--line2));
+}
+.rel-tnode::after{
+  content:"";position:absolute;left:0;top:15px;width:10px;height:1px;
+  background:color-mix(in srgb,var(--lc,#8b7cf6) 40%,var(--line2));
+}
+.rel-tnode-row{
+  display:flex;align-items:center;gap:7px;padding:4px 8px;border-radius:8px;
+  font-size:11px;color:var(--chalk);min-height:28px;
+}
+.rel-tnode-row:hover{background:color-mix(in srgb,var(--chalk) 4%,transparent)}
+.rel-tnode-row.on{
+  background:color-mix(in srgb,var(--accent,var(--amber)) 10%,transparent);
+  font-weight:600;
+}
+.rel-tnode-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;box-shadow:0 0 6px currentColor}
+.rel-tnode-name{
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  flex:1;font-family:var(--font);
+}
+
+/* ---------- SVG DAG 图 ---------- */
+.rel-graph{overflow:auto;padding:6px}
+.rel-svg{display:block;background:transparent}
+.rel-svg-node{cursor:pointer}
+.rel-svg-card{
+  font-family:var(--font);color:var(--chalk);
+  display:flex;flex-direction:column;justify-content:center;
+  padding:4px 10px;height:100%;box-sizing:border-box;overflow:hidden;
+}
+.rel-svg-title{
+  font-size:10.5px;font-weight:600;line-height:1.25;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.rel-svg-sub{
+  font-family:var(--mono);font-size:8px;color:var(--dim);margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.rel-svg-edge{transition:stroke-opacity .15s}
+
+/* ---------- 任务看板（批次分组 + 卡片） ---------- */
+.rel-board{display:flex;flex-direction:column;gap:14px;padding:4px 2px}
+.rel-board-group{
+  border:1px solid var(--line2);border-radius:14px;overflow:hidden;
+  background:color-mix(in srgb,var(--chalk) 1.5%,transparent);
+}
+.rel-board-group-h{
+  display:flex;align-items:center;gap:8px;padding:8px 12px;
+  font-family:var(--mono);font-size:10px;font-weight:700;color:var(--chalk);
+  background:color-mix(in srgb,var(--chalk) 3%,transparent);
+  border-bottom:1px solid var(--line2);
+}
+.rel-board-group-dot{width:7px;height:7px;border-radius:50%;background:var(--accent,var(--amber));flex-shrink:0}
+.rel-board-caret{font-size:9px;color:var(--dim);width:12px;text-align:center;flex-shrink:0;transition:transform .15s}
+.rel-board-group-toggle{cursor:pointer;user-select:none}
+.rel-board-group-toggle:hover{background:color-mix(in srgb,var(--chalk) 5%,transparent)}
+.rel-board-group-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rel-board-group-count,.rel-board-group-pct{font-size:8.5px;color:var(--dim);flex-shrink:0}
+.rel-board-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;padding:8px}
+.rel-board-card{
+  display:flex;flex-direction:column;gap:4px;text-align:left;
+  border:1px solid var(--line2);border-left:3px solid var(--bc,#63656e);border-radius:10px;
+  padding:8px 10px;cursor:pointer;transition:.15s;
+  background:color-mix(in srgb,var(--chalk) 2%,transparent);
+  font-family:var(--font);
+}
+.rel-board-card:hover{border-color:color-mix(in srgb,var(--bc,#63656e) 40%,var(--line2));background:color-mix(in srgb,var(--bc,#63656e) 6%,transparent)}
+.rel-board-card.live{
+  border-color:color-mix(in srgb,var(--bc,#63656e) 60%,var(--line2));
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--bc,#63656e) 25%,transparent),0 4px 14px rgba(0,0,0,.3);
+  animation:relLivePulse 2s ease-in-out infinite;
+}
+@keyframes relLivePulse{
+  0%,100%{box-shadow:0 0 0 1px color-mix(in srgb,var(--bc,#63656e) 25%,transparent),0 4px 14px rgba(0,0,0,.3)}
+  50%{box-shadow:0 0 0 2px color-mix(in srgb,var(--bc,#63656e) 45%,transparent),0 4px 18px color-mix(in srgb,var(--bc,#63656e) 15%,transparent)}
+}
+.rel-board-card.live .rel-board-title{color:var(--chalk)}
+.rel-board-card.archived{opacity:.6}
+.rel-board-card.batch{border-left-color:var(--violet)}
+.rel-board-title{font-size:11px;font-weight:600;color:var(--chalk);line-height:1.3}
+.rel-board-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.rel-board-status{font-family:var(--mono);font-size:8px;color:var(--bc,#63656e)}
+.rel-board-todo,.rel-board-dev,.rel-board-arch{
+  font-family:var(--mono);font-size:7.5px;color:var(--dim);
+  border:1px solid var(--line2);border-radius:4px;padding:0 4px;
+}
+.rel-board-file{
+  font-family:var(--mono);font-size:7.5px;color:var(--mint);
+  border:1px solid color-mix(in srgb,var(--mint) 30%,var(--line2));
+  border-radius:4px;padding:0 4px;
+}
+.rel-board-time{font-family:var(--mono);font-size:7.5px;color:var(--dim)}
+.rel-board-links{
+  font-family:var(--mono);font-size:7.5px;color:var(--violet);
+  border:1px solid color-mix(in srgb,var(--violet) 35%,var(--line2));
+  border-radius:4px;padding:0 4px;
+}
+.rel-board-sess{
+  font-family:var(--mono);font-size:7.5px;color:#4aa3ff;
+  border:1px solid color-mix(in srgb,#4aa3ff 35%,var(--line2));
+  border-radius:4px;padding:0 4px;
+}
+.rel-board-proj{
+  font-family:var(--mono);font-size:7.5px;color:var(--mist);
+  border:1px solid var(--line2);border-radius:4px;padding:0 4px;
+}
+
+/* 项目规范地图：trellis-update-spec 沉淀的团队规范（可展开正文） */
+.rel-spec-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;padding:8px}
+.rel-spec-item{
+  border:1px solid var(--line2);border-radius:8px;
+  background:color-mix(in srgb,var(--chalk) 1.5%,transparent);
+}
+.rel-spec-item.filled{border-left:3px solid var(--mint)}
+.rel-spec-item summary{
+  display:flex;flex-direction:column;gap:3px;padding:6px 8px;cursor:pointer;
+  list-style:none;user-select:none;
+}
+.rel-spec-item summary::-webkit-details-marker{display:none}
+.rel-spec-item summary::before{content:"▸";color:var(--dim);font-size:8px;position:absolute;margin-left:-10px;transition:transform .15s}
+.rel-spec-item[open] summary::before{transform:rotate(90deg)}
+.rel-spec-item summary:hover{background:color-mix(in srgb,var(--chalk) 3%,transparent)}
+.rel-spec-name{font-size:10px;font-weight:600;color:var(--chalk);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:4px}
+.rel-spec-meta{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding-left:4px}
+.rel-spec-cat{font-family:var(--mono);font-size:7.5px;color:var(--dim)}
+.rel-spec-status{font-family:var(--mono);font-size:7.5px}
+.rel-spec-item.filled .rel-spec-status{color:var(--mint)}
+.rel-spec-item:not(.filled) .rel-spec-status{color:var(--dim)}
+.rel-spec-lines{font-family:var(--mono);font-size:7.5px;color:var(--dim);margin-left:auto}
+.rel-spec-refs{font-family:var(--mono);font-size:7.5px;color:var(--violet)}
+.rel-spec-body{
+  padding:8px 10px;border-top:1px solid var(--line2);
+  font-size:10.5px;line-height:1.5;color:var(--chalk);
+  max-height:280px;overflow:auto;
+}
+.rel-spec-sub-label{
+  font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--dim);padding:6px 10px 2px;
+}
+.rel-spec-empty-group{
+  border:1px dashed var(--line2);border-radius:8px;margin:6px 8px;padding:0;
+  background:transparent;
+}
+.rel-spec-empty-group summary{
+  font-family:var(--mono);font-size:9px;color:var(--dim);
+  padding:6px 10px;cursor:pointer;user-select:none;list-style:none;
+}
+.rel-spec-empty-group summary::-webkit-details-marker{display:none}
+.rel-spec-empty-group summary:hover{color:var(--chalk)}
+.rel-spec-body .doc-section summary{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--dim)}
+.rel-board-warn{
+  font-family:var(--mono);font-size:7.5px;color:#e7c56a;
+  border:1px solid color-mix(in srgb,#e7c56a 35%,var(--line2));
+  border-radius:4px;padding:0 4px;
+}
+
+/* 关联面板：点卡片展开，展示该任务与其他任务的串联点 */
+.rel-link-panel{
+  border:1px solid color-mix(in srgb,var(--violet) 30%,var(--line2));
+  border-radius:12px;padding:10px 12px;margin:0 2px 10px;
+  background:color-mix(in srgb,var(--violet) 5%,transparent);
+}
+.rel-link-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.rel-link-title{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--chalk)}
+.rel-link-close{
+  border:1px solid var(--line2);background:transparent;color:var(--dim);
+  border-radius:5px;padding:0 6px;cursor:pointer;font-size:10px;
+}
+.rel-link-close:hover{color:var(--chalk);border-color:var(--rose)}
+.rel-link-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px}
+.rel-link-label{font-family:var(--mono);font-size:8px;color:var(--dim);flex-shrink:0}
+.rel-link-chip{
+  font-size:9px;color:var(--mist);background:color-mix(in srgb,var(--chalk) 4%,transparent);
+  border:1px solid var(--line2);border-radius:99px;padding:1px 8px;cursor:pointer;transition:.15s;
+}
+.rel-link-chip:hover{color:var(--chalk);border-color:color-mix(in srgb,var(--violet) 40%,var(--line2))}
+.rel-link-row.dim{font-size:10px;color:var(--dim)}
+/* 关联网络：节点卡片 + 连线 */
+.rel-link-canvas{overflow:auto;padding:8px}
+.rel-link-svg{display:block;min-width:100%}
+.rel-link-node{cursor:pointer;transition:opacity .15s}
+.rel-link-node:hover{opacity:.85}
+.rel-link-card{
+  font-family:var(--font);color:var(--chalk);
+  display:flex;flex-direction:column;justify-content:center;gap:2px;
+  padding:3px 8px;height:100%;box-sizing:border-box;overflow:hidden;
+}
+.rel-link-card-title{font-size:9.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rel-link-card-meta{font-family:var(--mono);font-size:7px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rel-board-pct{font-family:var(--mono);font-size:8px;color:var(--dim);margin-left:auto}
+.rel-board-bar{height:3px;border-radius:99px;background:color-mix(in srgb,var(--chalk) 8%,transparent);overflow:hidden}
+.rel-board-bar i{display:block;height:100%;border-radius:99px}
+/* 批次标签：标记任务所属的功能批次 */
+.rel-board-batch-tag{
+  display:inline-block;font-family:var(--mono);font-size:7.5px;color:var(--violet);
+  border:1px solid color-mix(in srgb,var(--violet) 30%,var(--line2));
+  border-radius:4px;padding:0 5px;margin-bottom:2px;
+}
+
+/* 关联图图例：说明线型含义 */
+.rel-legend{
+  display:flex;flex-wrap:wrap;gap:8px 14px;padding:2px 4px 8px;
+  font-family:var(--mono);font-size:8px;color:var(--dim);letter-spacing:.03em;
+}
+.rel-legend-item{display:inline-flex;align-items:center;gap:5px}
+.legend-line{width:16px;height:0;border-top:2px solid}
+.legend-line.solid{border-color:#45c4a0}
+.legend-line.dashed{border-style:dashed;border-color:#8b7cf6}
+.legend-line.dashed-violet{border-style:dashed;border-color:#f0a35e}
+.legend-dot{width:7px;height:7px;border-radius:50%}
+.legend-dot.center{background:var(--amber)}
+.legend-dot.sat{background:#8b7cf6}
+
+/* 中心任务详情面板（subtask 清单） */
+.rel-detail{
+  margin-top:14px;padding:10px 12px;border:1px solid var(--line2);border-radius:12px;
+  background:color-mix(in srgb,var(--chalk) 2%,transparent);
+}
+.rel-detail-h{margin-bottom:6px}
+.rel-detail-subs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px}
+.rel-detail-sub{
+  display:flex;align-items:center;gap:7px;padding:3px 6px;border-radius:6px;
+  font-size:11px;color:var(--chalk);
+}
+.rel-detail-sub:hover{background:color-mix(in srgb,var(--chalk) 4%,transparent)}
+.rel-detail-sub.done{color:var(--dim)}
+.rel-detail-check{flex-shrink:0;font-size:10px;width:12px;text-align:center}
+.rel-detail-sub.done .rel-detail-check{color:var(--mint)}
+.rel-detail-subname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rel-detail-substatus{
+  font-family:var(--mono);font-size:8px;color:var(--dim);text-transform:uppercase;
+}
+.rel-detail.empty{padding:8px 12px;font-size:11px;color:var(--dim)}
+/* 节点标记行：dev 徽章 + scope 标签 + spec chip */
+.dev-badge{
+  display:inline-flex;align-items:center;font-family:var(--mono);font-size:7.5px;font-weight:700;
+  color:var(--dim);border:1px solid var(--line2);border-radius:4px;padding:0 4px;margin-right:4px;
+  text-transform:none;
+}
+.scope-tag{
+  display:inline-flex;align-items:center;font-family:var(--mono);font-size:7.5px;
+  color:var(--dim);margin-right:4px;
+}
+.spec-chip{
+  display:inline-flex;align-items:center;font-family:var(--mono);font-size:7.5px;font-weight:600;
+  border:1px solid;border-radius:99px;padding:0 6px;margin-right:4px;line-height:14px;
+  max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:1px;
+}
 
 /* Inspect header（详情 / 证据） */
 .inspect-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
