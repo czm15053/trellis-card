@@ -4,6 +4,24 @@
 
 Trellis Card 是一款 macOS / Windows / Linux 桌面端小工具，以「卡片」和「胶囊」两种形态实时展示 Trellis 项目中的任务进度与 Agent 活动。它不修改任务，只负责让你一眼看清当前在发生什么。
 
+## 支持的系统
+
+| 系统 | 安装包 |
+|---|---|
+| **macOS**（Apple Silicon + Intel） | `.dmg` |
+| **Windows**（x64） | `.exe` / `.msi` |
+| **Linux / Ubuntu**（x64） | `.deb` / `.AppImage` |
+
+## 支持的 Agent
+
+| Agent | 接入方式 | 采集内容 |
+|---|---|---|
+| **Codex** | 应用侧写入 `~/.codex/hooks.json` | 会话开始、工具活动、任务绑定 |
+| **Claude Code** | 应用侧写入 `~/.claude/settings.json` | 会话开始、工具活动、任务绑定 |
+| **Cursor** | 应用侧写入 `~/.cursor/hooks.json` | 会话开始、工具活动（纯观察者） |
+| **Pi** | 用户级全局扩展 `~/.pi/agent/extensions/` | 会话开始、用户 prompt、工具活动（纯观察者） |
+| **OpenCode** | 用户级全局插件 `~/.config/opencode/plugins/` | 用户消息、工具活动（纯观察者） |
+
 ![](./docs/screenshots/01-card-running.png)
 
 ## 核心特性
