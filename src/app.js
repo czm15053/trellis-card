@@ -95,6 +95,7 @@ const state = {
   mode: 'card',           // 'card' | 'capsule'
   theme: isThemeId(document.body.dataset.theme) ? document.body.dataset.theme : 'specimen',
   showArchived: false,    // 是否显示已归档任务（用于树列表过滤）
+  winHeights: { card: null, back: null, admin: null }, // 各视图缓存窗口高度（切视图秒切，不重测量）
 };
 let indexedTasks = [];    // 树列表当前可见扁平顺序（数字键 1-9 用，收起子项不计入）
 let treeCollapsed = new Set();  // 已收起父节点的稳定 key（'项目::任务id'），跨渲染保留
@@ -271,6 +272,13 @@ function loadPrefs() {
     if (typeof p.autoFollowImportant === 'boolean') state.autoFollowImportant = p.autoFollowImportant;
     if (typeof p.showArchived === 'boolean') state.showArchived = p.showArchived;
     if (isThemeId(p.theme)) state.theme = p.theme;
+    /* 各视图缓存窗口高度：card（概要）/ back（详情）/ admin（设置）。数字且>0 才采用。 */
+    if (p.winHeights && typeof p.winHeights === 'object') {
+      for (const k of ['card', 'back', 'admin']) {
+        const v = p.winHeights[k];
+        if (typeof v === 'number' && v >= 160) state.winHeights[k] = v;
+      }
+    }
   } catch { /* 忽略损坏的本地数据 */ }
   const requestedTheme = new URLSearchParams(location.search).get('theme');
   if (isThemeId(requestedTheme)) state.theme = requestedTheme;
@@ -283,6 +291,7 @@ function savePrefs() {
       treeOpen: state.treeOpen, alwaysOnTop: state.alwaysOnTop,
       autoFollowImportant: state.autoFollowImportant, theme: state.theme,
       showArchived: state.showArchived,
+      winHeights: state.winHeights,
     }));
   } catch { /* localStorage 不可用时静默 */ }
 }
@@ -1546,9 +1555,25 @@ function scheduleWindowFit() {
   }
   clearTimeout(fitWinTimer);
   fitWinTimer = setTimeout(() => {
-    /* 等 CSS 过渡（顶/底收起动画 .3s）落定后再量；用实际布局矩形而不是 scrollHeight（overflow:hidden 下不可靠） */
+    /* 缓存优先：当前视图有缓存高度且未手动拉伸时，直接用缓存 set_size（秒切），
+       不做实际测量 —— 详情页/概要页切换丝滑。缓存可能在内容变化后过时，
+       因此秒切后再走一次测量分支更新缓存（见下），保证后续高度准确。 */
+    const viewKey = state.flipped ? 'back' : (state.adminOpen ? 'admin' : 'card');
+    const cached = state.winHeights[viewKey];
     const world = $('world'), card = $('card');
     if (!world || !card) return;
+    let usedCached = false;
+    if (cached && !userResized && !fitInFlight && cached > 0) {
+      usedCached = true;
+      world.style.height = `${cached}px`;
+      world.style.maxHeight = `${cached}px`;
+      if (Math.abs(cached - window.innerHeight) > FIT_DEADZONE) {
+        sendFitWindow(cached);
+      }
+      /* 继续走测量分支：用当前实际内容高度更新缓存（秒切已生效，测量只校准缓存，
+         除非差异很大才二次 set_size）。 */
+    }
+    /* 等 CSS 过渡（顶/底收起动画 .3s）落定后再量；用实际布局矩形而不是 scrollHeight（overflow:hidden 下不可靠） */
     /* 关键：测量时移除舞台当前的尺寸约束，取内容自然高度；测量完成后
        把目标高度显式写回舞台，避免原生窗口异步 resize 期间 flex 链又按旧视口收缩。 */
     world.style.height = 'auto';
@@ -1592,6 +1617,15 @@ function scheduleWindowFit() {
       h = Math.min(h, Math.max(160, Math.floor(screen.availHeight - 40)));
     }
     h = Math.max(160, Math.ceil(h));
+    /* 实际测量完成：更新当前视图缓存（下次切回直接秒切）。仅在未手动拉伸时更新，
+       避免覆盖用户手动调整的高度。 */
+    if (!userResized) {
+      const k = state.flipped ? 'back' : (state.adminOpen ? 'admin' : 'card');
+      if (state.winHeights[k] !== h) {
+        state.winHeights[k] = h;
+        savePrefs();
+      }
+    }
     const target = h;
     fitPendingHeight = target;
     /* 用户手动拉伸过窗口：内容放得下时舞台跟随窗口（不锁内容高度），拉伸跟手。
@@ -1625,6 +1659,11 @@ function scheduleWindowFit() {
       /* 已在途：等待完成回调再处理最新目标 */
       return;
     }
+    /* 刚用缓存秒切过：实测只校准缓存，除非内容变化超过死区才二次 set_size（避免跳动）。 */
+    if (usedCached && Math.abs(target - cached) <= FIT_DEADZONE * 3) {
+      fitLastSent = target;
+      return;
+    }
     sendFitWindow(target);
   }, 500);
 }
@@ -1633,10 +1672,15 @@ let fitPendingHeight = 0;
 let fitInFlight = false;
 let fitLastSent = 0;
 let userResized = false;
+/* fit 触发的 set_size 生效截止时间：期间到达的 resize 不算「用户拉伸」（fit 缩放是异步的，
+   resize 事件可能在 fitInFlight=false 后才到，需时间窗口区分）。 */
+let fitActiveUntil = 0;
+const FIT_ACTIVE_WINDOW_MS = 800;
 const FIT_DEADZONE = 15;
 function sendFitWindow(h) {
   fitLastSent = h;
   fitInFlight = true;
+  fitActiveUntil = Date.now() + FIT_ACTIVE_WINDOW_MS;
   call('fit_window_height', { height: h })
     .catch((error) => console.error('[fit_window_height]', error))
     .finally(() => {
@@ -1704,8 +1748,16 @@ async function toggleFlip(force) {
   if (target === state.flipped) return;
   state.flipped = target;
   if (!target) state.evidenceTarget = null;   /* 返回正面时清除临时 evidence 展示 */
+  /* 翻面回来（概要页）：重置「用户拉伸」标记，确保 fit 能收缩窗口到概要页高度。 */
+  if (!target) {
+    userResized = false;
+    document.body.classList.remove('user-resized');
+  }
   applyFlipCard();
   if (target) await loadBack(t);
+  /* 翻面动画（.flip 过渡约 0.68s）完成后，背面内容已稳定；延迟重新 fit 窗口高度，
+     避免动画未完成时测量到不稳定的高度（详情页/概要页切换拉伸「时有时无」的根因）。 */
+  setTimeout(scheduleWindowFit, 750);
 }
 /* 背面数据：artifacts 用 list_tasks 自带的，文档（prd/design/implement/调研/报告等）走 get_task（聚焦期内缓存）。
    activeTarget：本次展示的任务；异步返回时用它判断是否回填，避免 evidence 候选（非 currentFocus）停在加载中。 */
@@ -1735,6 +1787,9 @@ async function loadBack(t) {
   })) {
     renderBack(t, state.prdCache.docs, false, state.prdCache.error);
   }
+  /* 文档异步加载完成后，背面内容高度可能变化：重新 fit 窗口高度。
+     延迟让 renderBack 布局稳定后再测量（翻面动画 + 内容渲染）。 */
+  scheduleWindowFit();
 }
 function renderBack(t, docs, loading, error) {
   const back = $('back');
@@ -3266,11 +3321,17 @@ function bindExcerptFit() {
      可避免卡片仍按 resize 前的视口高度布局，导致底部出现透明空白。 */
   window.addEventListener('resize', () => {
     if (state.view === 'main' && state.mode === 'card' && !state.treeOpen) {
-      /* 区分「用户手动拉伸」vs「fit 触发的 set_size」：fit 在途时（fitInFlight）说明
-         resize 是程序改的，不算用户操作；否则视为用户手动拉伸窗口。 */
-      if (!fitInFlight) {
+      /* 区分「用户手动拉伸」vs「fit 触发的 set_size」：
+         fit 触发的 set_size 是异步的，resize 事件可能在 fitInFlight=false 后才到达。
+         用时间窗口（fitActiveUntil）判断：fit 生效期内到达的 resize 不算用户操作。
+         否则翻面/详情页的 fit 缩放会被误判为「用户拉伸」，导致之后不收缩。 */
+      if (!fitInFlight && Date.now() > fitActiveUntil) {
         userResized = true;
         document.body.classList.add('user-resized');
+        /* 用户手动拉伸后：记录当前视图高度到缓存（下次切回该视图直接恢复）。 */
+        const k = state.flipped ? 'back' : (state.adminOpen ? 'admin' : 'card');
+        state.winHeights[k] = window.innerHeight;
+        savePrefs();
       }
       /* 窗口实际尺寸已变，同步 fit 状态机基线，避免误判目标差。 */
       fitLastSent = window.innerHeight;
