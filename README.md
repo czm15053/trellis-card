@@ -4,6 +4,24 @@
 
 Trellis Card 是一款 macOS / Windows / Linux 桌面端小工具，以「卡片」和「胶囊」两种形态实时展示 Trellis 项目中的任务进度与 Agent 活动。它不修改任务，只负责让你一眼看清当前在发生什么。
 
+## 支持的系统
+
+| 系统 | 安装包 |
+|---|---|
+| **macOS**（Apple Silicon + Intel） | `.dmg` |
+| **Windows**（x64） | `.exe` / `.msi` |
+| **Linux / Ubuntu**（x64） | `.deb` / `.AppImage` |
+
+## 支持的 Agent
+
+| Agent | 接入方式 | 采集内容 |
+|---|---|---|
+| **Codex** | 应用侧写入 `~/.codex/hooks.json` | 会话开始、工具活动、任务绑定 |
+| **Claude Code** | 应用侧写入 `~/.claude/settings.json` | 会话开始、工具活动、任务绑定 |
+| **Cursor** | 应用侧写入 `~/.cursor/hooks.json` | 会话开始、工具活动（纯观察者） |
+| **Pi** | 用户级全局扩展 `~/.pi/agent/extensions/` | 会话开始、用户 prompt、工具活动（纯观察者） |
+| **OpenCode** | 用户级全局插件 `~/.config/opencode/plugins/` | 用户消息、工具活动（纯观察者） |
+
 ![](./docs/screenshots/01-card-running.png)
 
 ## 核心特性
@@ -51,6 +69,14 @@ Trellis Card 把任务的生命周期压缩成四种可感知的状态：
 
 关闭窗口即隐藏到托盘，不会误退；随时从托盘唤回。
 
+### 7. 窗口可拉伸
+
+卡片窗口默认贴合内容高度（内容自适应），也可拖拽边缘/角自由调整大小，放大后内容自动铺满利用空间；调整过的尺寸会记住，下次启动恢复。
+
+### 8. 新版本提示
+
+启动时自动检查 GitHub 最新 Release，有新版时在窗口底部弹出提示条（含版本号与更新说明），一键跳转下载，也可忽略该版本。
+
 ## 快速开始
 
 ### 直接下载使用
@@ -91,10 +117,10 @@ Hook 只需安装一次，即可观察多个项目。若已进入主界面，可
 
 1. 点击卡片右上角的三横线，打开「观察菜单」。
 2. 在「配置」区域点击「设置」。
-3. 在「Agent 接入」中选择 `Codex`、`Claude Code` 或 `Cursor`，点击「安装」。
+3. 在「Agent 接入」中选择 `Codex`、`Claude Code`、`Cursor`、`Pi` 或 `OpenCode`，点击「安装」。
 4. 重启对应 Agent；此后它在 Trellis 项目中的活动会自动出现在卡片中。
 
-> 说明：Cursor 的 hook 是纯观察者，只采集 `sessionStart` / `preToolUse` / `beforeShellExecution` / `stop` / `sessionEnd` 事件，不参与权限决策，也不会阻断或修改命令。由于 Cursor 不暴露「等待授权」事件，卡片上 Cursor 会话以「运行中 / 空闲 / 一轮完成」为主。
+> 说明：Cursor / Pi / OpenCode 的 hook 是纯观察者，只采集会话与工具活动，不参与权限决策，也不会阻断或修改命令。Pi 通过用户级全局扩展（`~/.pi/agent/extensions/`）、OpenCode 通过用户级全局插件（`~/.config/opencode/plugins/`）接入，均无需在项目内放置文件。
 
 「设置」会显示 Hook 是否已安装；需要停止接入时，点击同一位置的「移除」即可。应用只管理自身写入的 Hook，不会改动其他配置。
 

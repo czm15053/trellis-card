@@ -40,6 +40,8 @@ const HOOK_AGENTS = Object.freeze([
   { id: 'codex', label: 'Codex', description: '采集 Codex 会话中的任务和工具活动', configPath: '~/.codex/hooks.json' },
   { id: 'claude', label: 'Claude Code', description: '采集 Claude Code 会话中的任务和工具活动', configPath: '~/.claude/settings.json' },
   { id: 'cursor', label: 'Cursor', description: '采集 Cursor 会话中的任务和工具活动', configPath: '~/.cursor/hooks.json' },
+  { id: 'pi', label: 'Pi', description: '采集 Pi 会话中的任务和工具活动', configPath: '~/.pi/agent/extensions/trellis-card.ts' },
+  { id: 'opencode', label: 'OpenCode', description: '采集 OpenCode 会话中的任务和工具活动', configPath: '~/.config/opencode/plugins/trellis-card.js' },
 ]);
 /* star 色点取项目内「最紧急」kind：卡住 > 收束 > 动手 > 规划 */
 const KIND_URGENCY = { halt: 0, wrap: 1, work: 2, plan: 3, done: 4 };
@@ -93,6 +95,7 @@ const state = {
   mode: 'card',           // 'card' | 'capsule'
   theme: isThemeId(document.body.dataset.theme) ? document.body.dataset.theme : 'specimen',
   showArchived: false,    // 是否显示已归档任务（用于树列表过滤）
+  winHeights: { card: null, back: null, admin: null }, // 各视图缓存窗口高度（切视图秒切，不重测量）
 };
 let indexedTasks = [];    // 树列表当前可见扁平顺序（数字键 1-9 用，收起子项不计入）
 let treeCollapsed = new Set();  // 已收起父节点的稳定 key（'项目::任务id'），跨渲染保留
@@ -189,6 +192,82 @@ function report(cmd, e) {
   toast(errMsg(e));
 }
 
+/* ---------- 新版本更新提示（GitHub Release 检查） ---------- */
+const GITHUB_REPO = 'czm15053/trellis-card';
+const IGNORED_VERSION_KEY = 'trellis_card_ignored_version';
+
+/* 语义化版本比较：a<b 返回 -1，a>b 返回 1，相等返回 0。 */
+function compareVersions(a, b) {
+  const pa = String(a || '').replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '').replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
+
+async function checkForUpdate() {
+  if (!hasTauri) return;
+  try {
+    const [localVersion, res] = await Promise.all([
+      call('get_version'),
+      fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } }),
+    ]);
+    if (!res.ok) return; /* 限流/网络错误 → 静默 */
+    const data = await res.json();
+    const latest = String(data.tag_name || '').replace(/^v/, '');
+    if (!latest || !localVersion) return;
+    if (compareVersions(latest, localVersion) <= 0) return; /* 无新版本 */
+    const ignored = localStorage.getItem(IGNORED_VERSION_KEY);
+    if (ignored && compareVersions(latest, ignored) <= 0) return; /* 已忽略该版本 */
+    showUpdateBanner({
+      version: latest,
+      notes: String(data.body || '').slice(0, 200),
+      url: data.html_url || `https://github.com/${GITHUB_REPO}/releases/latest`,
+    });
+  } catch (error) {
+    /* 静默：检查失败不打扰用户 */
+  }
+}
+
+/* 更新提示条：版本号 + 更新说明摘要 + 更新/忽略 */
+function showUpdateBanner({ version, notes, url }) {
+  const banner = $('updateBanner');
+  if (!banner) return;
+  $('updateVersion').textContent = `发现新版本 v${version}`;
+  const notesEl = $('updateNotes');
+  if (notesEl) {
+    /* 更新说明来自 GitHub Release body（markdown）：用 marked 渲染为 HTML，保持排版。 */
+    if (notes) {
+      notesEl.innerHTML = (window.marked && window.marked.parse
+        ? window.marked.parse(notes)
+        : escHtml(notes));
+      notesEl.hidden = false;
+    } else {
+      notesEl.textContent = '';
+      notesEl.hidden = true;
+    }
+  }
+  const updateBtn = $('btnUpdateGo');
+  if (updateBtn) {
+    updateBtn.onclick = () => { call('open_url', { url }).catch(() => window.open(url, '_blank')); };
+  }
+  const ignoreBtn = $('btnUpdateIgnore');
+  if (ignoreBtn) {
+    ignoreBtn.onclick = () => {
+      localStorage.setItem(IGNORED_VERSION_KEY, version);
+      banner.hidden = true;
+    };
+  }
+  const closeBtn = $('btnUpdateClose');
+  if (closeBtn) closeBtn.onclick = () => { banner.hidden = true; };
+  banner.hidden = false;
+}
+
 /* ---------- 本地持久化 ---------- */
 function loadPrefs() {
   try {
@@ -201,6 +280,13 @@ function loadPrefs() {
     if (typeof p.autoFollowImportant === 'boolean') state.autoFollowImportant = p.autoFollowImportant;
     if (typeof p.showArchived === 'boolean') state.showArchived = p.showArchived;
     if (isThemeId(p.theme)) state.theme = p.theme;
+    /* 各视图缓存窗口高度：card（概要）/ back（详情）/ admin（设置）。数字且>0 才采用。 */
+    if (p.winHeights && typeof p.winHeights === 'object') {
+      for (const k of ['card', 'back', 'admin']) {
+        const v = p.winHeights[k];
+        if (typeof v === 'number' && v >= 160) state.winHeights[k] = v;
+      }
+    }
   } catch { /* 忽略损坏的本地数据 */ }
   const requestedTheme = new URLSearchParams(location.search).get('theme');
   if (isThemeId(requestedTheme)) state.theme = requestedTheme;
@@ -213,6 +299,7 @@ function savePrefs() {
       treeOpen: state.treeOpen, alwaysOnTop: state.alwaysOnTop,
       autoFollowImportant: state.autoFollowImportant, theme: state.theme,
       showArchived: state.showArchived,
+      winHeights: state.winHeights,
     }));
   } catch { /* localStorage 不可用时静默 */ }
 }
@@ -452,6 +539,7 @@ function applyRuntimeSnapshot(snapshot) {
     const key = runtimeKeyFromView(view);
     if (key) next.set(key, view);
   }
+
   /* 快照整体替换前先记录旧状态，用于判定「是否有语义变化」（决定是否触发重渲染）。
      runtime 数据可能在轮询/事件中重复到达，无变化时不应再触发 render。 */
   const prevRuntimeKey = runtimeFingerprint(state.runtimeByTask, state.runtimeActivities);
@@ -970,11 +1058,18 @@ function filterOptions() {
 }
 function applyProjectFilter(name) {
   state.filter = name || null;
+  /* 切换项目后重置「显示已归档」：避免不同项目归档状态混乱，用户需主动勾选才显示归档。 */
+  if (state.showArchived) {
+    state.showArchived = false;
+    savePrefs();
+    const chk = $('chkShowArchived');
+    if (chk) chk.checked = false;
+  }
   ensureFocusValid();
   closeProjectPop();
   render();
 }
-function fillFilterStars(box, { closePop = false } = {}) {
+function fillFilterStars(box) {
   if (!box) return;
   box.innerHTML = '';
   for (const opt of filterOptions()) {
@@ -986,19 +1081,14 @@ function fillFilterStars(box, { closePop = false } = {}) {
     b.setAttribute('aria-selected', String(opt.name ? state.filter === opt.name : !state.filter));
     b.innerHTML = `<i style="--c:${opt.color}"></i>${esc(opt.label)}${opt.name ? ` ${opt.count}` : ''}`;
     b.onclick = () => {
-      if (closePop) applyProjectFilter(opt.name);
-      else {
-        state.filter = opt.name || null;
-        ensureFocusValid();
-        render();
-      }
+      applyProjectFilter(opt.name);
     };
     box.appendChild(b);
   }
 }
 function renderStars() {
   fillFilterStars($('treeStars'));
-  fillFilterStars($('projectPop'), { closePop: true });
+  fillFilterStars($('projectPop'));
   const chipLabel = $('projectChipLabel');
   if (chipLabel) chipLabel.textContent = state.filter ? state.filter : '全部项目';
   const chip = $('btnProjectChip');
@@ -1025,7 +1115,7 @@ function toggleProjectPop(force) {
   if (open) {
     /* 开 chip 时关主菜单，避免双 popover */
     if (state.menuOpen) toggleMenu(false);
-    fillFilterStars(pop, { closePop: true });
+    fillFilterStars(pop);
     pop.hidden = false;
     btn.classList.add('on');
     btn.setAttribute('aria-expanded', 'true');
@@ -1200,7 +1290,10 @@ function observeLedFor(displayState) {
 
 /* 观测台时间线：从真实时间戳派生 2-3 条「会话时间线」并横向压成一行，不伪造 activity。
    条目：会话开始(agent.startedAt) / 最近活动(agent.updatedAt) / 任务变更(lastChangedAt，缺失时用 mtime 兜底但文案保持「任务变更」)。
-   缺失的时间戳整条省略；全部缺失返回低调空态。固定高度，不撑高卡片。 */
+   缺失的时间戳整条省略；全部缺失返回低调空态。固定高度，不撑高卡片。
+   动画防闪烁：内容未变（仅 render 触发，如 agent-state-changed 高频推送）时加 no-anim，
+   避免 tlIn 入场动画每次重建都重播导致「每秒跳动」；内容真正变化时才播一次入场动效。 */
+const _timelineSeen = new Set();
 function observeTimelineFor(rt, t) {
   const entries = [];
   const sec = (v) => (typeof v === 'number' ? v : null);
@@ -1212,10 +1305,20 @@ function observeTimelineFor(rt, t) {
   push('会话开始', sec(agent && agent.startedAt));
   push('最近活动', sec(agent && agent.updatedAt));
   push('任务变更', sec(rt && rt.lastChangedAt) ?? sec(t && t.mtime / 1000));
+  let cls = 'observe-timeline';
   if (!entries.length) {
+    /* 空态：不参与动画防闪烁（内容本来就稳定） */
     return `<div class="observe-timeline empty" aria-hidden="true"><span>暂无活动记录</span></div>`;
   }
-  return `<ul class="observe-timeline" aria-label="最近活动">${entries.join('')}</ul>`;
+  const html = entries.join('');
+  /* 内容防闪烁：相同内容（仅 render 触发）不加动画避免重播闪烁；
+     内容变化（真实时间戳更新）播一次入场动效。内容驱动，不依赖调用点引用。 */
+  if (_timelineSeen.has(html)) {
+    cls += ' no-anim';
+  } else {
+    _timelineSeen.add(html);
+  }
+  return `<ul class="${cls}" aria-label="最近活动">${html}</ul>`;
 }
 
 /* ---------- 主卡片 ---------- */
@@ -1445,6 +1548,9 @@ function syncFit() {
       world.style.height = '';
       world.style.maxHeight = '';
     }
+    /* 退出 fit（切胶囊/翻面/任务树）后重置「用户拉伸」标记，回到默认自适应。 */
+    userResized = false;
+    document.body.classList.remove('user-resized');
   }
   scheduleWindowFit();
 }
@@ -1459,9 +1565,25 @@ function scheduleWindowFit() {
   }
   clearTimeout(fitWinTimer);
   fitWinTimer = setTimeout(() => {
-    /* 等 CSS 过渡（顶/底收起动画 .3s）落定后再量；用实际布局矩形而不是 scrollHeight（overflow:hidden 下不可靠） */
+    /* 缓存优先：当前视图有缓存高度且未手动拉伸时，直接用缓存 set_size（秒切），
+       不做实际测量 —— 详情页/概要页切换丝滑。缓存可能在内容变化后过时，
+       因此秒切后再走一次测量分支更新缓存（见下），保证后续高度准确。 */
+    const viewKey = state.flipped ? 'back' : (state.adminOpen ? 'admin' : 'card');
+    const cached = state.winHeights[viewKey];
     const world = $('world'), card = $('card');
     if (!world || !card) return;
+    let usedCached = false;
+    if (cached && !userResized && !fitInFlight && cached > 0) {
+      usedCached = true;
+      world.style.height = `${cached}px`;
+      world.style.maxHeight = `${cached}px`;
+      if (Math.abs(cached - window.innerHeight) > FIT_DEADZONE) {
+        sendFitWindow(cached);
+      }
+      /* 继续走测量分支：用当前实际内容高度更新缓存（秒切已生效，测量只校准缓存，
+         除非差异很大才二次 set_size）。 */
+    }
+    /* 等 CSS 过渡（顶/底收起动画 .3s）落定后再量；用实际布局矩形而不是 scrollHeight（overflow:hidden 下不可靠） */
     /* 关键：测量时移除舞台当前的尺寸约束，取内容自然高度；测量完成后
        把目标高度显式写回舞台，避免原生窗口异步 resize 期间 flex 链又按旧视口收缩。 */
     world.style.height = 'auto';
@@ -1505,14 +1627,40 @@ function scheduleWindowFit() {
       h = Math.min(h, Math.max(160, Math.floor(screen.availHeight - 40)));
     }
     h = Math.max(160, Math.ceil(h));
+    /* 实际测量完成：更新当前视图缓存（下次切回直接秒切）。仅在未手动拉伸时更新，
+       避免覆盖用户手动调整的高度。 */
+    if (!userResized) {
+      const k = state.flipped ? 'back' : (state.adminOpen ? 'admin' : 'card');
+      if (state.winHeights[k] !== h) {
+        state.winHeights[k] = h;
+        savePrefs();
+      }
+    }
+    const target = h;
+    fitPendingHeight = target;
+    /* 用户手动拉伸过窗口：内容放得下时舞台跟随窗口（不锁内容高度），拉伸跟手。
+       CSS body.fit.user-resized .world{height:100%} 负责舞台铺满。 */
+    if (userResized) {
+      if (target <= window.innerHeight + FIT_DEADZONE) {
+        world.style.height = '';
+        world.style.maxHeight = '';
+        fitLastSent = target;
+        return;
+      }
+      /* 内容超高：舞台锁到内容高度 + 放大窗口 */
+      world.style.height = `${target}px`;
+      world.style.maxHeight = `${target}px`;
+      if (fitInFlight) return;
+      sendFitWindow(target);
+      return;
+    }
+    /* 默认自适应：窗口 = 内容高度（未手动拉伸），双向（放大/缩小）保证卡片无下方空白。 */
     world.style.height = `${h}px`;
     world.style.maxHeight = `${h}px`;
     /* 死区 + in-flight/target 防回环：
        - 死区 FIT_DEADZONE：内容高度微小波动（如摘要在换行）不触发 resize，避免 DWM 重排；
        - in-flight：fit_window_height 在途时不重复发 IPC，记录最新目标，完成后再按需补发，
          防止内容与窗口高度互相追赶形成回环。 */
-    const target = h;
-    fitPendingHeight = target;
     if (Math.abs(target - window.innerHeight) <= FIT_DEADZONE) {
       fitLastSent = target;   /* 目标已在死区内，视为已对齐 */
       return;
@@ -1521,17 +1669,28 @@ function scheduleWindowFit() {
       /* 已在途：等待完成回调再处理最新目标 */
       return;
     }
+    /* 刚用缓存秒切过：实测只校准缓存，除非内容变化超过死区才二次 set_size（避免跳动）。 */
+    if (usedCached && Math.abs(target - cached) <= FIT_DEADZONE * 3) {
+      fitLastSent = target;
+      return;
+    }
     sendFitWindow(target);
   }, 500);
 }
-/* fit 状态机：目标高度 / 在途标记 / 最近一次发送值 */
+/* fit 状态机：目标高度 / 在途标记 / 最近一次发送值 / 用户是否手动拉伸过 */
 let fitPendingHeight = 0;
 let fitInFlight = false;
 let fitLastSent = 0;
+let userResized = false;
+/* fit 触发的 set_size 生效截止时间：期间到达的 resize 不算「用户拉伸」（fit 缩放是异步的，
+   resize 事件可能在 fitInFlight=false 后才到，需时间窗口区分）。 */
+let fitActiveUntil = 0;
+const FIT_ACTIVE_WINDOW_MS = 800;
 const FIT_DEADZONE = 15;
 function sendFitWindow(h) {
   fitLastSent = h;
   fitInFlight = true;
+  fitActiveUntil = Date.now() + FIT_ACTIVE_WINDOW_MS;
   call('fit_window_height', { height: h })
     .catch((error) => console.error('[fit_window_height]', error))
     .finally(() => {
@@ -1599,8 +1758,16 @@ async function toggleFlip(force) {
   if (target === state.flipped) return;
   state.flipped = target;
   if (!target) state.evidenceTarget = null;   /* 返回正面时清除临时 evidence 展示 */
+  /* 翻面回来（概要页）：重置「用户拉伸」标记，确保 fit 能收缩窗口到概要页高度。 */
+  if (!target) {
+    userResized = false;
+    document.body.classList.remove('user-resized');
+  }
   applyFlipCard();
   if (target) await loadBack(t);
+  /* 翻面动画（.flip 过渡约 0.68s）完成后，背面内容已稳定；延迟重新 fit 窗口高度，
+     避免动画未完成时测量到不稳定的高度（详情页/概要页切换拉伸「时有时无」的根因）。 */
+  setTimeout(scheduleWindowFit, 750);
 }
 /* 背面数据：artifacts 用 list_tasks 自带的，文档（prd/design/implement/调研/报告等）走 get_task（聚焦期内缓存）。
    activeTarget：本次展示的任务；异步返回时用它判断是否回填，避免 evidence 候选（非 currentFocus）停在加载中。 */
@@ -1630,6 +1797,9 @@ async function loadBack(t) {
   })) {
     renderBack(t, state.prdCache.docs, false, state.prdCache.error);
   }
+  /* 文档异步加载完成后，背面内容高度可能变化：重新 fit 窗口高度。
+     延迟让 renderBack 布局稳定后再测量（翻面动画 + 内容渲染）。 */
+  scheduleWindowFit();
 }
 function renderBack(t, docs, loading, error) {
   const back = $('back');
@@ -3004,7 +3174,12 @@ function bindUI() {
     chkArchived.onchange = async () => {
       state.showArchived = chkArchived.checked;
       savePrefs();
-      if (chkArchived.checked) await ensureAllArchived();
+      if (chkArchived.checked) {
+        /* 勾选时强制失效并重拉所有项目归档：避免 cached（archivedVersion）导致
+           「首次勾选不显示、取消再勾选才生效」的竞态/陈旧缓存问题。 */
+        for (const n of Object.keys(state.tasksByProject)) invalidateArchived(n);
+        await ensureAllArchived();
+      }
       if (state.view === 'main') render();
     };
   }
@@ -3209,6 +3384,18 @@ function bindExcerptFit() {
      可避免卡片仍按 resize 前的视口高度布局，导致底部出现透明空白。 */
   window.addEventListener('resize', () => {
     if (state.view === 'main' && state.mode === 'card' && !state.treeOpen) {
+      /* 区分「用户手动拉伸」vs「fit 触发的 set_size」：
+         fit 触发的 set_size 是异步的，resize 事件可能在 fitInFlight=false 后才到达。
+         用时间窗口（fitActiveUntil）判断：fit 生效期内到达的 resize 不算用户操作。
+         否则翻面/详情页的 fit 缩放会被误判为「用户拉伸」，导致之后不收缩。 */
+      if (!fitInFlight && Date.now() > fitActiveUntil) {
+        userResized = true;
+        document.body.classList.add('user-resized');
+        /* 用户手动拉伸后：记录当前视图高度到缓存（下次切回该视图直接恢复）。 */
+        const k = state.flipped ? 'back' : (state.adminOpen ? 'admin' : 'card');
+        state.winHeights[k] = window.innerHeight;
+        savePrefs();
+      }
       /* 窗口实际尺寸已变，同步 fit 状态机基线，避免误判目标差。 */
       fitLastSent = window.innerHeight;
       scheduleWindowFit();
@@ -3252,6 +3439,8 @@ async function boot() {
     renderSetup();
   }
   setInterval(pollTasks, POLL_MS);   /* 轮询兜底：文件监听之外的保险 */
+  /* 新版本检查：延迟 3s 避免启动卡顿；失败静默。 */
+  setTimeout(checkForUpdate, 3000);
 }
 
 boot();

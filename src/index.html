@@ -187,5 +187,19 @@
   </div>
 </div>
 <div class="toast" id="toast" role="status"></div>
+<!-- 新版本更新提示 -->
+<div class="update-banner" id="updateBanner" hidden role="dialog" aria-label="版本更新">
+  <div class="update-banner-inner">
+    <div class="update-head">
+      <strong id="updateVersion">发现新版本</strong>
+      <button type="button" class="update-close" id="btnUpdateClose" title="关闭" aria-label="关闭">×</button>
+    </div>
+    <p id="updateNotes" class="update-notes" hidden></p>
+    <div class="update-actions">
+      <button type="button" class="update-btn primary" id="btnUpdateGo">更新</button>
+      <button type="button" class="update-btn" id="btnUpdateIgnore">忽略此版本</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
