@@ -2230,13 +2230,16 @@ function renderRelations(focused) {
     specs: '项目沉淀的通用规范（trellis-update-spec）',
   };
   lanes.innerHTML =
-    `<div class="lanes-row">` +
-    REL_VIEWS.map(v =>
-      `<button type="button" class="lane-chip view${state.relView === v.key ? ' on' : ''}" data-view="${v.key}">${v.label}</button>`
-    ).join('') +
-    `</div><div class="lanes-row">` +
+    /* 第一行：目录（项目 tab，大号突出，放最上面） */
+    `<div class="lanes-row lanes-proj">` +
     [null, ...state.projects.map(p => p.name)].map(name =>
-      `<button type="button" class="lane-chip${state.filter === name ? ' on' : ''}" data-proj="${esc(name || '')}">${name ? esc(name) : '全部'}</button>`
+      `<button type="button" class="lane-chip proj-tab${state.filter === name ? ' on' : ''}" data-proj="${esc(name || '')}">${name ? esc(name) : '全部项目'}</button>`
+    ).join('') +
+    `</div>` +
+    /* 第二行：视图模块（小号 chip，放下面） */
+    `<div class="lanes-row lanes-view">` +
+    REL_VIEWS.map(v =>
+      `<button type="button" class="lane-chip view-tab${state.relView === v.key ? ' on' : ''}" data-view="${v.key}">${v.label}</button>`
     ).join('') +
     `</div><div class="lanes-hint">${esc(VIEW_HINT[state.relView] || '')}</div>`;
   lanes.querySelectorAll('.lane-chip[data-view]').forEach(btn => {

@@ -810,6 +810,20 @@ body.fit .sheet.settings #adminBody{overflow:auto;flex:1 1 auto;min-height:0}
   display:flex;gap:5px;flex-wrap:wrap;flex-shrink:0;padding:2px 14px 8px;
 }
 .lanes-row{display:flex;gap:5px;flex-wrap:wrap;width:100%}
+/* 目录（项目 tab）：大号突出，放最上面，主题色区分 */
+.lanes-proj{padding:0 4px 4px}
+.lane-chip.proj-tab{
+  font-size:10.5px;font-weight:700;padding:5px 12px;
+  border-color:color-mix(in srgb,var(--accent,var(--amber)) 25%,var(--line2));
+  color:var(--mist);
+}
+.lane-chip.proj-tab.on{
+  color:var(--ink2);background:var(--accent,var(--amber));border-color:transparent;
+}
+/* 视图模块 tab：小号中性，放下面 */
+.lanes-view{padding:0 4px}
+.lane-chip.view-tab{font-size:9px;font-weight:600;padding:3px 9px}
+.lane-chip.view-tab.on{color:var(--chalk);background:color-mix(in srgb,var(--accent,var(--amber)) 18%,transparent);border-color:color-mix(in srgb,var(--accent,var(--amber)) 40%,var(--line2))}
 .lanes-hint{
   font-family:var(--mono);font-size:7.5px;color:var(--dim);letter-spacing:.03em;
   padding:0 4px 4px;opacity:.8;width:100%;
