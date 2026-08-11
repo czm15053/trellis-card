@@ -20,6 +20,13 @@ const PI_EXTENSIONS_DIR: &str = ".pi/agent/extensions";
 const PI_BRIDGE_FILE: &str = "trellis-card.ts";
 const PI_BRIDGE_TEMPLATE: &str = include_str!("../templates/pi_bridge.ts");
 
+/* OpenCode 同样是「plugin + JS 事件」平台（非 JSON hook 配置）。
+观察者 plugin 以用户级全局目录 ~/.config/opencode/plugins/ 安装（所有项目生效，
+自动发现，无需项目信任）。与 Pi 对称：写入自有 plugin 文件，卸载只删该文件。 */
+const OPENCODE_PLUGINS_DIR: &str = ".config/opencode/plugins";
+const OPENCODE_PLUGIN_FILE: &str = "trellis-card.js";
+const OPENCODE_PLUGIN_TEMPLATE: &str = include_str!("../templates/opencode_plugin.js");
+
 /* Cursor 的 hook 事件（camelCase 小写开头，hooks.json 扁平结构）。
 只采集核心事件集；Cursor 无 PermissionRequest/PostToolUse 等事件。 */
 const CURSOR_EVENTS: &[&str] = &[
@@ -103,6 +110,22 @@ fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
     let temp = path.with_extension("tmp");
     fs::write(&temp, data).map_err(|error| error.to_string())?;
     fs::rename(&temp, path).map_err(|error| error.to_string())
+}
+
+/* 独立文件型 agent（Pi 扩展 / OpenCode plugin）：安装=写入自有文件（幂等，保留
+同目录其他文件），卸载=删除自有文件。原子写入避免运行时读到半截文件。 */
+fn write_standalone_file(path: &Path, template: &str, uninstall: bool) -> Result<(), String> {
+    if uninstall {
+        if path.exists() {
+            fs::remove_file(path).map_err(|error| error.to_string())?;
+        }
+    } else if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        write_atomic(path, template.as_bytes())?;
+    } else {
+        write_atomic(path, template.as_bytes())?;
+    }
+    Ok(())
 }
 
 fn load_json(path: &Path) -> Result<(Value, bool), String> {
@@ -260,6 +283,7 @@ fn config_path(agent: &str) -> PathBuf {
         "codex" => "TRELLIS_CARD_CODEX_CONFIG",
         "cursor" => "TRELLIS_CARD_CURSOR_CONFIG",
         "pi" => "TRELLIS_CARD_PI_EXTENSIONS_FILE",
+        "opencode" => "TRELLIS_CARD_OPENCODE_PLUGIN_FILE",
         _ => "TRELLIS_CARD_HOOK_CONFIG",
     };
     if let Ok(path) = std::env::var(env_key) {
@@ -283,6 +307,7 @@ fn default_config_path(agent: &str, home: &Path) -> PathBuf {
         "codex" => home.join(".codex/hooks.json"),
         "cursor" => home.join(".cursor/hooks.json"),
         "pi" => home.join(PI_EXTENSIONS_DIR).join(PI_BRIDGE_FILE),
+        "opencode" => home.join(OPENCODE_PLUGINS_DIR).join(OPENCODE_PLUGIN_FILE),
         _ => home.join(".config/trellis-card/hooks.json"),
     }
 }
@@ -303,25 +328,19 @@ fn hook_command(executable: &Path, agent: &str) -> String {
 }
 
 pub fn install_hooks(agent: &str, uninstall: bool) -> Result<PathBuf, String> {
-    if !matches!(agent, "claude" | "codex" | "cursor" | "pi") {
-        return Err("agent must be codex, claude, cursor or pi".into());
+    if !matches!(agent, "claude" | "codex" | "cursor" | "pi" | "opencode") {
+        return Err("agent must be codex, claude, cursor, pi or opencode".into());
     }
-    /* Pi：无 JSON hook 配置，桥接扩展是用户级目录里的独立文件。
-    安装=写入自有扩展文件（幂等），卸载=删除自有文件（保留同目录其他扩展）。 */
-    if agent == "pi" {
+    /* Pi / OpenCode：无 JSON hook 配置，桥接文件是用户级目录里的独立文件。
+    安装=写入自有文件（幂等），卸载=删除自有文件（保留同目录其他文件）。 */
+    if agent == "pi" || agent == "opencode" {
         let path = config_path(agent);
-        if uninstall {
-            if path.exists() {
-                fs::remove_file(&path).map_err(|error| error.to_string())?;
-            }
+        let template = if agent == "pi" {
+            PI_BRIDGE_TEMPLATE
         } else {
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-            }
-            /* 原子写入：与 claude/codex/cursor 的 write_atomic 保持一致，
-            避免 Pi 加载扩展时读到半截文件。 */
-            write_atomic(&path, PI_BRIDGE_TEMPLATE.as_bytes())?;
-        }
+            OPENCODE_PLUGIN_TEMPLATE
+        };
+        write_standalone_file(&path, template, uninstall)?;
         return Ok(path);
     }
     let path = config_path(agent);
@@ -351,12 +370,12 @@ pub fn install_hooks(agent: &str, uninstall: bool) -> Result<PathBuf, String> {
 }
 
 pub fn status(agent: &str) -> Result<HookStatus, String> {
-    if !matches!(agent, "codex" | "claude" | "cursor" | "pi") {
-        return Err("agent must be codex, claude, cursor or pi".into());
+    if !matches!(agent, "codex" | "claude" | "cursor" | "pi" | "opencode") {
+        return Err("agent must be codex, claude, cursor, pi or opencode".into());
     }
     let path = config_path(agent);
-    if agent == "pi" {
-        /* Pi 的「配置」就是扩展文件本身：installed = 文件存在。 */
+    if agent == "pi" || agent == "opencode" {
+        /* Pi / OpenCode 的「配置」就是桥接文件本身：installed = 文件存在。 */
         let installed = path.is_file();
         return Ok(HookStatus {
             agent: agent.to_owned(),
@@ -375,7 +394,7 @@ pub fn status(agent: &str) -> Result<HookStatus, String> {
 }
 
 pub fn statuses() -> Result<Vec<HookStatus>, String> {
-    ["codex", "claude", "cursor", "pi"]
+    ["codex", "claude", "cursor", "pi", "opencode"]
         .into_iter()
         .map(status)
         .collect()
@@ -578,6 +597,61 @@ mod tests {
 
     #[test]
     fn pi_rejects_unknown_agent() {
+        assert!(install_hooks("unknown", false).is_err());
+        assert!(status("unknown").is_err());
+    }
+
+    #[test]
+    fn opencode_uses_user_level_plugins_file_path() {
+        let home = Path::new("/tmp/test-home");
+        assert_eq!(
+            default_config_path("opencode", home),
+            home.join(".config/opencode/plugins/trellis-card.js")
+        );
+    }
+
+    #[test]
+    fn opencode_install_writes_plugin_and_status_detects_it() {
+        let home = std::env::temp_dir().join(format!(
+            "trellis-card-opencode-install-{}",
+            std::process::id()
+        ));
+        std::env::set_var("TRELLIS_CARD_OPENCODE_PLUGIN_FILE", home.join("trellis-card.js"));
+        let path = config_path("opencode");
+        let _ = std::fs::remove_file(&path);
+
+        assert!(!path.exists());
+        let before = status("opencode").unwrap();
+        assert!(!before.installed);
+
+        install_hooks("opencode", false).unwrap();
+        let after = status("opencode").unwrap();
+        assert!(after.installed);
+        assert_eq!(after.config_path, path.to_string_lossy());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("Trellis Card bridge plugin for OpenCode"));
+        assert!(content.contains("chat.message"));
+        assert!(content.contains("tool.execute.before"));
+
+        /* 幂等：重复安装不报错、不重复 */
+        install_hooks("opencode", false).unwrap();
+        let same = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, same);
+
+        /* 卸载：只删自有文件，同目录其他 plugin 保留 */
+        std::fs::write(home.join("other-plugin.js"), "export default async()=>{}\n").unwrap();
+        install_hooks("opencode", true).unwrap();
+        assert!(!path.exists());
+        assert!(home.join("other-plugin.js").exists());
+        let after_uninstall = status("opencode").unwrap();
+        assert!(!after_uninstall.installed);
+
+        let _ = std::fs::remove_dir_all(&home);
+        std::env::remove_var("TRELLIS_CARD_OPENCODE_PLUGIN_FILE");
+    }
+
+    #[test]
+    fn opencode_rejects_unknown_agent() {
         assert!(install_hooks("unknown", false).is_err());
         assert!(status("unknown").is_err());
     }

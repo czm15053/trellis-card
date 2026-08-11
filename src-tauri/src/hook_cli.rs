@@ -879,4 +879,43 @@ mod tests {
         assert_eq!(event.tool_name.as_deref(), Some("bash"));
         assert_eq!(event.activity.as_deref(), Some("cargo test"));
     }
+
+    #[test]
+    fn opencode_chat_message_payload_parses() {
+        let event = parse_hook_payload(
+            r#"{"agent":"opencode","hook_event_name":"UserPromptSubmit","prompt":"用 trellis 实现功能","session_id":"opencode_abc123","cwd":"/repo"}"#,
+            &HookOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(event.event_name, "UserPromptSubmit");
+        assert_eq!(event.agent_kind, "opencode");
+        assert_eq!(event.session_id, "opencode_abc123");
+        assert_eq!(event.activity.as_deref(), Some("用 trellis 实现功能"));
+    }
+
+    #[test]
+    fn opencode_tool_execute_before_payload_parses() {
+        let event = parse_hook_payload(
+            r#"{"agent":"opencode","hook_event_name":"PreToolUse","tool_name":"bash","tool_input":{"command":"cargo build"},"session_id":"opencode_abc123","cwd":"/repo"}"#,
+            &HookOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(event.event_name, "PreToolUse");
+        assert_eq!(event.agent_kind, "opencode");
+        assert_eq!(event.tool_name.as_deref(), Some("bash"));
+        assert_eq!(event.activity.as_deref(), Some("cargo build"));
+    }
+
+    #[test]
+    fn opencode_tool_execute_after_payload_parses() {
+        let event = parse_hook_payload(
+            r#"{"agent":"opencode","hook_event_name":"PostToolUse","tool_name":"read","tool_input":{"file_path":"/repo/src/main.rs"},"session_id":"opencode_abc123","cwd":"/repo"}"#,
+            &HookOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(event.event_name, "PostToolUse");
+        assert_eq!(event.agent_kind, "opencode");
+        assert_eq!(event.tool_name.as_deref(), Some("read"));
+        assert!(event.activity.is_some());
+    }
 }
