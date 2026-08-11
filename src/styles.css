@@ -330,6 +330,8 @@ body[data-mode="capsule"] .card{display:none}
 
 /* ---------- 卡片高度自适应：内容定高，底部透明；超出 100vh 时 card 收缩、摘要滚动 ---------- */
 body.fit .world{height:auto;max-height:100vh}
+/* 用户手动拉伸窗口后：舞台铺满窗口（跟随拉伸，不锁内容高度），内容利用更大空间。 */
+body.fit.user-resized .world{height:100%;max-height:none}
 /* WKWebView 对嵌套 flex:1 的可用高度传播并不稳定。舞台高度由 JS 明确写入后，
    正面链路也显式占满它，避免 .flip 只保持内容高度而卡片底部留空。 */
 body.fit .main-view{height:100%;flex:0 0 100%;min-height:0}
@@ -362,18 +364,21 @@ body.fit.admin-open .card,body.fit.admin-open .card[data-kind="idle"]{flex:1;min
   flex:1;min-height:0;width:100%;
   position:relative;border-radius:var(--radius);
   /* 圆角及子项裁剪使用兼容性稳定的 hidden；noise SVG 未作为背景使用，避免
-     WebView2 将该图层按矩形绘制。 */
+     WebView2 将该图层按矩形绘制。
+     外阴影用 filter:drop-shadow 而非 box-shadow：box-shadow 在 WebView2 上按
+     「直角矩形」绘制，圆角卡片会露出远大于卡片的大矩形外框（Windows 上可见
+     「透明背景边框」）。drop-shadow 跟随元素圆角形状，不产生矩形外框。 */
   overflow:hidden;
   border:1px solid var(--line2);
   background:
     linear-gradient(155deg,rgba(255,255,255,.05),transparent 42%),
     linear-gradient(180deg,#141824 0%,#0e1119 52%,#0a0c12 100%);
-  box-shadow:
-    0 30px 60px rgba(0,0,0,.55),
-    0 0 90px color-mix(in srgb,var(--accent,var(--amber)) 11%,transparent),
-    inset 0 1px 0 rgba(255,255,255,.06);
+  filter:
+    drop-shadow(0 30px 60px rgba(0,0,0,.55))
+    drop-shadow(0 0 90px color-mix(in srgb,var(--accent,var(--amber)) 11%,transparent));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
   animation:rise .55s var(--ease) both;
-  transition:box-shadow .5s var(--ease);
+  transition:filter .5s var(--ease),box-shadow .5s var(--ease);
   display:flex;flex-direction:column;
 }
 /* 顶部椭圆高光 */
@@ -506,6 +511,8 @@ body.fit.admin-open .card,body.fit.admin-open .card[data-kind="idle"]{flex:1;min
 }
 .observe-timeline li:nth-child(2){animation-delay:60ms}
 .observe-timeline li:nth-child(3){animation-delay:120ms}
+/* 内容未变时的重渲染不重播入场动画：避免高频 agent-state-changed 触发「每秒跳动」 */
+.observe-timeline.no-anim li{animation:none}
 @keyframes tlIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .observe-timeline li i{
   width:4px;height:4px;border-radius:50%;flex-shrink:0;align-self:center;
@@ -847,7 +854,9 @@ body.fit .sheet.settings #adminBody{overflow:auto;flex:1 1 auto;min-height:0}
 .setup-card{
   width:min(344px,calc(100% - 20px));border-radius:var(--radius);border:1px solid var(--line2);padding:26px 20px;text-align:center;
   background:var(--theme-card-bg);
-  box-shadow:0 30px 60px rgba(0,0,0,.55),0 0 90px rgba(240,163,94,.07),inset 0 1px 0 rgba(255,255,255,.06);
+  /* 外阴影用 drop-shadow 避免 WebView2 按直角矩形绘制（同 .card） */
+  filter:drop-shadow(0 30px 60px rgba(0,0,0,.55)) drop-shadow(0 0 90px rgba(240,163,94,.07));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
   animation:rise .55s var(--ease) both;
 }
 .setup-logo{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.3em;text-transform:uppercase;color:var(--dim)}
@@ -874,6 +883,34 @@ body.fit .sheet.settings #adminBody{overflow:auto;flex:1 1 auto;min-height:0}
 /* ---------- Toast ---------- */
 .toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%) translateY(20px);background:var(--theme-pop-bg, rgba(20,23,33,.92));backdrop-filter:blur(10px);color:var(--chalk);border:1px solid var(--line2);padding:9px 14px;border-radius:12px;font-size:12px;font-weight:600;opacity:0;pointer-events:none;transition:.22s var(--ease);box-shadow:0 12px 32px rgba(0,0,0,.45);z-index:50;max-width:320px;text-align:center}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ---------- 版本更新提示条 ---------- */
+.update-banner{
+  position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:60;
+  width:min(320px,calc(100% - 24px));
+  background:var(--theme-pop-bg, rgba(20,23,33,.94));backdrop-filter:blur(12px);
+  border:1px solid var(--line2);border-radius:14px;padding:12px 14px;
+  box-shadow:0 12px 32px rgba(0,0,0,.45);
+  animation:rise .3s var(--ease) both;
+}
+.update-banner-inner{display:flex;flex-direction:column;gap:8px}
+.update-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.update-head strong{font-size:12.5px;color:var(--chalk)}
+.update-close{
+  border:0;background:transparent;color:var(--dim);font-size:16px;line-height:1;
+  cursor:pointer;padding:2px 4px;border-radius:6px;
+}
+.update-close:hover{color:var(--chalk);background:color-mix(in srgb,var(--chalk) 8%,transparent)}
+.update-notes{margin:0;font-size:11px;color:var(--mist);line-height:1.5;max-height:60px;overflow:hidden}
+.update-actions{display:flex;gap:8px;margin-top:2px}
+.update-btn{
+  flex:1;border:1px solid var(--line2);background:transparent;color:var(--chalk);
+  border-radius:9px;padding:6px 10px;font-size:11px;font-weight:600;cursor:pointer;
+  transition:background .18s,color .18s,border-color .18s;
+}
+.update-btn:hover{background:color-mix(in srgb,var(--chalk) 6%,transparent)}
+.update-btn.primary{background:var(--amber);border-color:var(--amber);color:#141824}
+.update-btn.primary:hover{background:color-mix(in srgb,var(--amber) 88%,transparent)}
 
 /* ---------- 减少动态：全部动画关闭 ---------- */
 @media (prefers-reduced-motion:reduce){

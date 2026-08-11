@@ -706,6 +706,18 @@ fn remove_root(state: State<AppState>, path: String) -> Result<RootsOut, String>
     Ok(RootsOut { roots })
 }
 
+/* 当前应用版本（更新检查用）。来自 Cargo.toml version，编译时注入。 */
+#[tauri::command]
+fn get_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/* 用系统默认浏览器打开 URL（跨平台：macOS open / Windows start / Linux xdg-open）。 */
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    open::that(&url).map_err(|error| format!("打开链接失败: {error}"))
+}
+
 #[tauri::command]
 fn list_projects(state: State<AppState>) -> Vec<scan::ProjectInfo> {
     let cfg = state.config.lock().unwrap();
@@ -910,14 +922,19 @@ fn set_always_on_top(app: AppHandle, state: State<AppState>, flag: bool) -> Resu
 fn set_window_mode(app: AppHandle, mode: String) -> Result<(), String> {
     let window = app.get_webview_window("main").ok_or("窗口不存在")?;
     let position = window.outer_position().ok();
-    let (w, h) = if mode == "capsule" {
-        (360.0, 136.0)
+    if mode == "capsule" {
+        /* 胶囊是紧凑交互态，保持固定尺寸（拉伸会破坏紧凑布局）。 */
+        let _ = window.set_resizable(false);
+        window
+            .set_size(tauri::LogicalSize::new(360.0, 136.0))
+            .map_err(|e| e.to_string())?;
     } else {
-        (380.0, 640.0)
-    };
-    window
-        .set_size(tauri::LogicalSize::new(w, h))
-        .map_err(|e| e.to_string())?;
+        /* card 模式：恢复可拉伸，设初始尺寸，用户可自由调整。 */
+        let _ = window.set_resizable(true);
+        window
+            .set_size(tauri::LogicalSize::new(380.0, 640.0))
+            .map_err(|e| e.to_string())?;
+    }
     if let Some(position) = position {
         window.set_position(position).map_err(|e| e.to_string())?;
     }
@@ -931,7 +948,15 @@ fn hide_window(app: AppHandle) {
     }
 }
 
-// 内容自适应：只在渲染稳定后由前端一次性调用（防抖+阈值在前端），不做连续跟随
+// 内容自适应：只在渲染稳定后由前端一次性调用（防抖+阈值在前端），不做连续跟随。
+// resizable 现在持久为 true（窗口可拉伸），fit 负责「内容高度对齐窗口」（双向：
+// 内容更高放大、内容更矮缩小），保证卡片无下方空白。不再临时切 resizable 往返。
+//
+// 计算 fit 的目标高度：始终返回内容高度（双向），前端在用户手动拉伸时跳过缩小。
+fn fit_target_height(content_h: f64) -> f64 {
+    content_h.clamp(160.0, 2000.0)
+}
+
 #[tauri::command]
 fn fit_window_height(app: AppHandle, height: f64) -> Result<(), String> {
     let window = app.get_webview_window("main").ok_or("窗口不存在")?;
@@ -939,38 +964,17 @@ fn fit_window_height(app: AppHandle, height: f64) -> Result<(), String> {
     let scale = window.scale_factor().map_err(|e| e.to_string())?;
     let size = window.inner_size().map_err(|e| e.to_string())?;
     let w = size.width as f64 / scale;
-    let mut h = height.clamp(160.0, 2000.0);
+    let mut h = fit_target_height(height);
     if let Ok(Some(monitor)) = window.current_monitor() {
         let max_h = monitor.size().height as f64 / scale - 40.0;
         h = h.min(max_h);
     }
-    /* macOS 无边框窗口在 resizable=false 时可能忽略 set_size，需临时置可调整再恢复。
-    Windows 上该往返会触发无边框窗口的 DWM 重排（高性能损耗且无收益），跳过。
-    平台差异化用 cfg! 运行时判断，保证两平台各自行为不变。 */
-    if !cfg!(windows) {
-        let _ = window.set_resizable(true);
-    }
     if let Err(error) = window.set_size(tauri::LogicalSize::new(w, h)) {
-        if !cfg!(windows) {
-            let _ = window.set_resizable(false);
-        }
         return Err(error.to_string());
     }
     if let Some(position) = position {
         let _ = window.set_position(position);
     }
-    /* 原生 resize 异步提交；macOS 延迟恢复位置和不可调整状态。 */
-    let delayed_window = window.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(180));
-        if let Some(position) = position {
-            let _ = delayed_window.set_position(position);
-        }
-        if !cfg!(windows) {
-            std::thread::sleep(std::time::Duration::from_millis(70));
-            let _ = delayed_window.set_resizable(false);
-        }
-    });
     Ok(())
 }
 
@@ -1032,6 +1036,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_version,
+            open_url,
             get_config,
             complete_setup,
             pick_folder,
@@ -1305,6 +1311,23 @@ mod tests {
     fn completion_transition_unfinished_to_unfinished_not_emit() {
         assert!(!is_completion_transition(Some("in_progress"), "blocked"));
         assert!(!is_completion_transition(Some("planning"), "review"));
+    }
+
+    /* ---- fit_target_height（窗口「只增不减」语义） ---- */
+
+    #[test]
+    fn fit_target_height_returns_content_height() {
+        /* 双向：内容高度始终为目标（放大或缩小），前端负责「用户拉伸不缩小」 */
+        assert_eq!(fit_target_height(500.0), 500.0);
+        assert_eq!(fit_target_height(640.0), 640.0);
+        assert_eq!(fit_target_height(400.0), 400.0);
+        assert_eq!(fit_target_height(300.0), 300.0);
+    }
+
+    #[test]
+    fn fit_target_height_clamps_to_min() {
+        /* 低于最小高度 → clamp 到 160 */
+        assert_eq!(fit_target_height(50.0), 160.0);
     }
 
     #[test]

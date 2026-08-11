@@ -21,17 +21,28 @@
 
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 /* ── Config ───────────────────────────────────────────────────────────── */
 
 function findCardBin(): string {
   const env = (process.env.TRELLIS_CARD_BIN || "").trim();
+  /* Windows 用 USERPROFILE，macOS/Linux 用 HOME。候选路径按平台区分：
+     Windows 走 %LOCALAPPDATA% 与 PATH；Unix 走常见安装路径与 PATH。 */
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const isWin = process.platform === "win32";
   const candidates = [
     env,
-    join(process.env.HOME || "", ".local/bin/trellis-card"),
-    "/usr/local/bin/trellis-card",
-    "/opt/homebrew/bin/trellis-card",
+    ...(isWin
+      ? [
+          join(process.env.LOCALAPPDATA || home, "Programs", "Trellis-Card", "trellis-card.exe"),
+          join(home, ".local", "bin", "trellis-card.exe"),
+        ]
+      : [
+          join(home, ".local", "bin", "trellis-card"),
+          "/usr/local/bin/trellis-card",
+          "/opt/homebrew/bin/trellis-card",
+        ]),
     "trellis-card", // resolve on PATH
   ].filter(Boolean) as string[];
   for (const c of candidates) {
@@ -89,16 +100,16 @@ function resolveProjectRoot(ctx: any): string {
 
 /** Walk up from cwd looking for a `.trellis/tasks` directory. */
 function findTrellisRoot(start: string): string {
-  let cur = start;
+  let cur = start || process.cwd() || "";
   for (let i = 0; i < 16 && cur; i++) {
     try {
       if (existsSync(join(cur, ".trellis", "tasks"))) return cur;
     } catch {
       return start;
     }
-    const idx = cur.lastIndexOf("/");
-    if (idx <= 0) return start;
-    cur = cur.slice(0, idx);
+    const parent = dirname(cur);
+    if (parent === cur) return start; /* 到根目录，停止 */
+    cur = parent;
   }
   return start;
 }

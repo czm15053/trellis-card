@@ -20,6 +20,7 @@ toml_edit = "0.20.2"
 dirs = "6"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 notify = "8"
+open = "5"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes", "Win32_Security"] }

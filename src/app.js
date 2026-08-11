@@ -191,6 +191,74 @@ function report(cmd, e) {
   toast(errMsg(e));
 }
 
+/* ---------- 新版本更新提示（GitHub Release 检查） ---------- */
+const GITHUB_REPO = 'czm15053/trellis-card';
+const IGNORED_VERSION_KEY = 'trellis_card_ignored_version';
+
+/* 语义化版本比较：a<b 返回 -1，a>b 返回 1，相等返回 0。 */
+function compareVersions(a, b) {
+  const pa = String(a || '').replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '').replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
+
+async function checkForUpdate() {
+  if (!hasTauri) return;
+  try {
+    const [localVersion, res] = await Promise.all([
+      call('get_version'),
+      fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } }),
+    ]);
+    if (!res.ok) return; /* 限流/网络错误 → 静默 */
+    const data = await res.json();
+    const latest = String(data.tag_name || '').replace(/^v/, '');
+    if (!latest || !localVersion) return;
+    if (compareVersions(latest, localVersion) <= 0) return; /* 无新版本 */
+    const ignored = localStorage.getItem(IGNORED_VERSION_KEY);
+    if (ignored && compareVersions(latest, ignored) <= 0) return; /* 已忽略该版本 */
+    showUpdateBanner({
+      version: latest,
+      notes: String(data.body || '').slice(0, 200),
+      url: data.html_url || `https://github.com/${GITHUB_REPO}/releases/latest`,
+    });
+  } catch (error) {
+    /* 静默：检查失败不打扰用户 */
+  }
+}
+
+/* 更新提示条：版本号 + 更新说明摘要 + 更新/忽略 */
+function showUpdateBanner({ version, notes, url }) {
+  const banner = $('updateBanner');
+  if (!banner) return;
+  $('updateVersion').textContent = `发现新版本 v${version}`;
+  const notesEl = $('updateNotes');
+  if (notesEl) {
+    notesEl.textContent = notes || '';
+    notesEl.hidden = !notes;
+  }
+  const updateBtn = $('btnUpdateGo');
+  if (updateBtn) {
+    updateBtn.onclick = () => { call('open_url', { url }).catch(() => window.open(url, '_blank')); };
+  }
+  const ignoreBtn = $('btnUpdateIgnore');
+  if (ignoreBtn) {
+    ignoreBtn.onclick = () => {
+      localStorage.setItem(IGNORED_VERSION_KEY, version);
+      banner.hidden = true;
+    };
+  }
+  const closeBtn = $('btnUpdateClose');
+  if (closeBtn) closeBtn.onclick = () => { banner.hidden = true; };
+  banner.hidden = false;
+}
+
 /* ---------- 本地持久化 ---------- */
 function loadPrefs() {
   try {
@@ -454,6 +522,7 @@ function applyRuntimeSnapshot(snapshot) {
     const key = runtimeKeyFromView(view);
     if (key) next.set(key, view);
   }
+
   /* 快照整体替换前先记录旧状态，用于判定「是否有语义变化」（决定是否触发重渲染）。
      runtime 数据可能在轮询/事件中重复到达，无变化时不应再触发 render。 */
   const prevRuntimeKey = runtimeFingerprint(state.runtimeByTask, state.runtimeActivities);
@@ -1202,7 +1271,10 @@ function observeLedFor(displayState) {
 
 /* 观测台时间线：从真实时间戳派生 2-3 条「会话时间线」并横向压成一行，不伪造 activity。
    条目：会话开始(agent.startedAt) / 最近活动(agent.updatedAt) / 任务变更(lastChangedAt，缺失时用 mtime 兜底但文案保持「任务变更」)。
-   缺失的时间戳整条省略；全部缺失返回低调空态。固定高度，不撑高卡片。 */
+   缺失的时间戳整条省略；全部缺失返回低调空态。固定高度，不撑高卡片。
+   动画防闪烁：内容未变（仅 render 触发，如 agent-state-changed 高频推送）时加 no-anim，
+   避免 tlIn 入场动画每次重建都重播导致「每秒跳动」；内容真正变化时才播一次入场动效。 */
+const _timelineSeen = new Set();
 function observeTimelineFor(rt, t) {
   const entries = [];
   const sec = (v) => (typeof v === 'number' ? v : null);
@@ -1214,10 +1286,20 @@ function observeTimelineFor(rt, t) {
   push('会话开始', sec(agent && agent.startedAt));
   push('最近活动', sec(agent && agent.updatedAt));
   push('任务变更', sec(rt && rt.lastChangedAt) ?? sec(t && t.mtime / 1000));
+  let cls = 'observe-timeline';
   if (!entries.length) {
+    /* 空态：不参与动画防闪烁（内容本来就稳定） */
     return `<div class="observe-timeline empty" aria-hidden="true"><span>暂无活动记录</span></div>`;
   }
-  return `<ul class="observe-timeline" aria-label="最近活动">${entries.join('')}</ul>`;
+  const html = entries.join('');
+  /* 内容防闪烁：相同内容（仅 render 触发）不加动画避免重播闪烁；
+     内容变化（真实时间戳更新）播一次入场动效。内容驱动，不依赖调用点引用。 */
+  if (_timelineSeen.has(html)) {
+    cls += ' no-anim';
+  } else {
+    _timelineSeen.add(html);
+  }
+  return `<ul class="${cls}" aria-label="最近活动">${html}</ul>`;
 }
 
 /* ---------- 主卡片 ---------- */
@@ -1447,6 +1529,9 @@ function syncFit() {
       world.style.height = '';
       world.style.maxHeight = '';
     }
+    /* 退出 fit（切胶囊/翻面/任务树）后重置「用户拉伸」标记，回到默认自适应。 */
+    userResized = false;
+    document.body.classList.remove('user-resized');
   }
   scheduleWindowFit();
 }
@@ -1507,14 +1592,31 @@ function scheduleWindowFit() {
       h = Math.min(h, Math.max(160, Math.floor(screen.availHeight - 40)));
     }
     h = Math.max(160, Math.ceil(h));
+    const target = h;
+    fitPendingHeight = target;
+    /* 用户手动拉伸过窗口：内容放得下时舞台跟随窗口（不锁内容高度），拉伸跟手。
+       CSS body.fit.user-resized .world{height:100%} 负责舞台铺满。 */
+    if (userResized) {
+      if (target <= window.innerHeight + FIT_DEADZONE) {
+        world.style.height = '';
+        world.style.maxHeight = '';
+        fitLastSent = target;
+        return;
+      }
+      /* 内容超高：舞台锁到内容高度 + 放大窗口 */
+      world.style.height = `${target}px`;
+      world.style.maxHeight = `${target}px`;
+      if (fitInFlight) return;
+      sendFitWindow(target);
+      return;
+    }
+    /* 默认自适应：窗口 = 内容高度（未手动拉伸），双向（放大/缩小）保证卡片无下方空白。 */
     world.style.height = `${h}px`;
     world.style.maxHeight = `${h}px`;
     /* 死区 + in-flight/target 防回环：
        - 死区 FIT_DEADZONE：内容高度微小波动（如摘要在换行）不触发 resize，避免 DWM 重排；
        - in-flight：fit_window_height 在途时不重复发 IPC，记录最新目标，完成后再按需补发，
          防止内容与窗口高度互相追赶形成回环。 */
-    const target = h;
-    fitPendingHeight = target;
     if (Math.abs(target - window.innerHeight) <= FIT_DEADZONE) {
       fitLastSent = target;   /* 目标已在死区内，视为已对齐 */
       return;
@@ -1526,10 +1628,11 @@ function scheduleWindowFit() {
     sendFitWindow(target);
   }, 500);
 }
-/* fit 状态机：目标高度 / 在途标记 / 最近一次发送值 */
+/* fit 状态机：目标高度 / 在途标记 / 最近一次发送值 / 用户是否手动拉伸过 */
 let fitPendingHeight = 0;
 let fitInFlight = false;
 let fitLastSent = 0;
+let userResized = false;
 const FIT_DEADZONE = 15;
 function sendFitWindow(h) {
   fitLastSent = h;
@@ -3163,6 +3266,12 @@ function bindExcerptFit() {
      可避免卡片仍按 resize 前的视口高度布局，导致底部出现透明空白。 */
   window.addEventListener('resize', () => {
     if (state.view === 'main' && state.mode === 'card' && !state.treeOpen) {
+      /* 区分「用户手动拉伸」vs「fit 触发的 set_size」：fit 在途时（fitInFlight）说明
+         resize 是程序改的，不算用户操作；否则视为用户手动拉伸窗口。 */
+      if (!fitInFlight) {
+        userResized = true;
+        document.body.classList.add('user-resized');
+      }
       /* 窗口实际尺寸已变，同步 fit 状态机基线，避免误判目标差。 */
       fitLastSent = window.innerHeight;
       scheduleWindowFit();
@@ -3206,6 +3315,8 @@ async function boot() {
     renderSetup();
   }
   setInterval(pollTasks, POLL_MS);   /* 轮询兜底：文件监听之外的保险 */
+  /* 新版本检查：延迟 3s 避免启动卡顿；失败静默。 */
+  setTimeout(checkForUpdate, 3000);
 }
 
 boot();
