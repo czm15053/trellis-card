@@ -1120,7 +1120,7 @@ fn set_window_mode(app: AppHandle, mode: String) -> Result<(), String> {
         /* 胶囊是紧凑交互态，保持固定尺寸（拉伸会破坏紧凑布局）。 */
         let _ = window.set_resizable(false);
         window
-            .set_size(tauri::LogicalSize::new(360.0, 136.0))
+            .set_size(tauri::LogicalSize::new(360.0, 40.0))
             .map_err(|e| e.to_string())?;
     } else {
         /* card 模式：恢复可拉伸，设初始尺寸，用户可自由调整。 */
@@ -1150,7 +1150,23 @@ fn set_window_size(app: AppHandle, width: f64, height: f64) -> Result<(), String
         return Err(e.to_string());
     }
     if let Some(position) = position {
-        window.set_position(position).map_err(|e| e.to_string())?;
+        /* outer_position 返回物理像素，set_size 用逻辑尺寸：统一到逻辑坐标计算 */
+        let scale = window.scale_factor().map_err(|e| e.to_string())?;
+        let mut x_logical = position.x as f64 / scale;
+        let y_logical = position.y as f64 / scale;
+        /* 放大时保持窗口在屏幕内：若右边缘将超出当前 monitor 右边界，向左平移对齐 */
+        if let Ok(Some(monitor)) = window.current_monitor() {
+            let mpos = monitor.position();
+            let msize = monitor.size();
+            let screen_right = mpos.x as f64 / scale + msize.width as f64 / scale;
+            let win_right = x_logical + width;
+            if win_right > screen_right {
+                x_logical = (screen_right - width).max(mpos.x as f64 / scale);
+            }
+        }
+        window
+            .set_position(tauri::LogicalPosition::new(x_logical, y_logical))
+            .map_err(|e| e.to_string())?;
     }
     /* macOS 延迟恢复不可调整状态 */
     let delayed = window.clone();
@@ -1175,7 +1191,7 @@ fn window_mode_size(mode: &str) -> (f64, f64) {
 }
 
 fn capsule_window_size(expanded: bool) -> (f64, f64) {
-    (360.0, if expanded { 136.0 } else { 62.0 })
+    (360.0, if expanded { 136.0 } else { 40.0 })
 }
 
 // 灵动岛展开/收起：原生窗口同步尺寸（消除透明点击死区）。
@@ -1198,6 +1214,29 @@ fn hide_window(app: AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
+}
+
+// 顶部吸附：把窗口移动到当前屏幕顶部中央（紧凑/展开高度自适应当前尺寸）。
+#[tauri::command]
+fn snap_window_top(app: AppHandle) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or("窗口不存在")?;
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| e.to_string())?
+        .ok_or("无当前显示器")?;
+    /* monitor.position()/size() 与 outer_size() 均为物理像素，统一在物理坐标计算。
+       set_position(PhysicalPosition) 原样应用，无需按 scale 换算。 */
+    let mpos = monitor.position();
+    let msize = monitor.size();
+    let wsize = window.outer_size().map_err(|e| e.to_string())?;
+    let w = wsize.width as f64;
+    /* 顶部中央：x 居中，y 顶部留 8px 边距（贴合菜单栏下方） */
+    let x = mpos.x as f64 + (msize.width as f64 - w) / 2.0;
+    let y = mpos.y as f64 + 8.0 * window.scale_factor().map_err(|e| e.to_string())?;
+    window
+        .set_position(tauri::PhysicalPosition::new(x.round(), y.round()))
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // 内容自适应：只在渲染稳定后由前端一次性调用（防抖+阈值在前端），不做连续跟随。
@@ -1249,6 +1288,9 @@ pub fn run() {
 
             let window = app.get_webview_window("main").expect("main window");
             let _ = window.set_always_on_top(cfg.always_on_top);
+            /* macOS 无边框透明窗口：去除系统阴影，避免胶囊态露出矩形窗口轮廓 */
+            #[cfg(target_os = "macos")]
+            let _ = window.set_shadow(false);
 
             // 关闭窗口 = 隐藏到托盘，不退出
             let w = window.clone();
@@ -1306,6 +1348,7 @@ pub fn run() {
             set_window_mode,
             set_window_size,
             set_capsule_expanded,
+            snap_window_top,
             fit_window_height,
             hide_window,
             get_runtime_snapshot,
@@ -1558,8 +1601,8 @@ mod tests {
 
     #[test]
     fn capsule_window_uses_compact_and_expanded_heights() {
-        assert_eq!(window_mode_size("capsule"), (360.0, 62.0));
-        assert_eq!(capsule_window_size(false), (360.0, 62.0));
+        assert_eq!(window_mode_size("capsule"), (360.0, 40.0));
+        assert_eq!(capsule_window_size(false), (360.0, 40.0));
         assert_eq!(capsule_window_size(true), (360.0, 136.0));
         assert_eq!(window_mode_size("card"), (380.0, 640.0));
     }

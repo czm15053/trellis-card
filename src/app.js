@@ -1052,6 +1052,7 @@ function render() {
   renderCapsule(t, projectActivity);
   renderAdmin();
   syncTools();
+  syncGrabHeader();
   savePrefs();
   /* sheet 无障碍语义：展开/收起同步 aria-hidden */
   const listSheet = $('list');
@@ -1121,8 +1122,20 @@ function renderStars() {
   fillFilterStars($('projectPop'));
   const chipLabel = $('projectChipLabel');
   if (chipLabel) chipLabel.textContent = state.filter ? state.filter : '全部项目';
+  const grabName = $('grabProjectName');
+  if (grabName) grabName.textContent = state.filter ? state.filter : '全部项目';
   const chip = $('btnProjectChip');
   if (chip) chip.classList.toggle('on', !!state.filter || isProjectPopOpen());
+}
+/* header 状态同步：蝴蝶灯取 card.runtimeState；meter（ticks+score）由 renderCard/renderProjectActivityCard 填充 */
+function syncGrabHeader() {
+  const card = $('card');
+  const led = $('grabLed');
+  if (led && card) {
+    const st = card.dataset.runtimeState || 'idle';
+    led.dataset.state = st;
+    led.title = DISPLAY_COPY[st] || st || '空闲';
+  }
 }
 function isProjectPopOpen() {
   const pop = $('projectPop');
@@ -1378,11 +1391,7 @@ function renderProjectActivityCard(activity) {
   const rtLike = { agent: { startedAt: null, updatedAt: activity.updatedAt || 0 }, lastChangedAt: activity.updatedAt || 0 };
   main.innerHTML = `
     <div class="pane">
-      <div class="head observe-head">
-        <span class="obs-mark" aria-hidden="true"></span>
-        <span class="repo">${esc(project)}</span>
-        <span class="meter"><span class="ticks"><i class="c"></i></span><span class="score">AI</span></span>
-      </div>
+      ${'' /* .head observe-head 已平移到 header，避免重复显示 */}
       <h2 class="title">${esc(agent)} 项目会话</h2>
       ${observeTimelineFor(rtLike, null)}
       <div class="runtime-hero state-${esc(displayState.replaceAll('_', '-'))}">
@@ -1408,6 +1417,9 @@ function renderProjectActivityCard(activity) {
       </div></div>
       <div class="foot"><span class="fid">${esc(activity.sessionId || 'session')}</span><span id="runtime-updated" class="when">更新于 ${esc(relTime(updatedAt)) || '—'}</span></div>
     </div>`;
+  /* 项目级会话：header meter 显示 AI（无 lane 进度） */
+  const grabMeter = $('grabMeter');
+  if (grabMeter) grabMeter.innerHTML = `<span class="ticks"><i class="c"></i></span><span class="score">AI</span>`;
 }
 
 function renderCard(t, projectActivity) {
@@ -1473,11 +1485,6 @@ function renderCard(t, projectActivity) {
     const updatedAt = rt.lastChangedAt ? rt.lastChangedAt * 1000 : t.mtime;
     main.innerHTML = `
       <div class="pane">
-        <div class="head observe-head">
-          <span class="obs-mark" aria-hidden="true"></span>
-          <span class="repo">${esc(t.project)}</span>
-          <span class="meter"><span class="ticks">${ticks}</span><span class="score">${n}<em>/4</em></span></span>
-        </div>
         <h2 class="title">${esc(t.title || t.id)}</h2>
         ${observeTimelineFor(rt, t)}
         <div class="runtime-hero state-${esc(displayState.replaceAll('_', '-'))}">
@@ -1505,6 +1512,9 @@ function renderCard(t, projectActivity) {
           <span id="runtime-updated" class="when">更新于 ${esc(relTime(updatedAt)) || '—'}</span>
         </div>
       </div>`;
+    /* header meter：ticks 刻度 + score 百分比（原 .head observe-head 内容平移到 header） */
+    const grabMeter = $('grabMeter');
+    if (grabMeter) grabMeter.innerHTML = `<span class="ticks">${ticks}</span><span class="score">${n}<em>/4</em></span>`;
     /* 子任务 bar：点击展开/收起清单（直接切 class 保住过渡动画） */
     const box = $('subsBox');
     if (box) {
@@ -2339,17 +2349,18 @@ function renderRelations(focused) {
     if (!specMap.size) {
       html += `<div class="tree-empty">暂无项目规范</div>`;
     } else {
-      const specCollapsed = relCollapsed.has('__specs__');
       /* 每个 spec 被多少任务引用（specRefs 交集），体现规范的实际使用 */
       const refCount = new Map();
       for (const t of allTasks) {
         for (const r of (t.specRefs || [])) refCount.set(r, (refCount.get(r) || 0) + 1);
       }
-      const specCard = (s) => `<details class="rel-spec-item${s.filled ? ' filled' : ''}"${s.filled ? ' open' : ''}>
+      /* preview 默认展开：单一项目（expandPreview=true）展开 spec 文档，全部项目收起；
+         showProject=true 时卡片标明所属项目 */
+      const specCard = (s, expandPreview, showProject) => `<details class="rel-spec-item${s.filled ? ' filled' : ''}"${expandPreview && s.filled ? ' open' : ''}>
         <summary>
           <span class="rel-spec-name" title="${esc(s.path)}">${esc(s.name)}</span>
           <span class="rel-spec-meta">
-            <span class="rel-spec-cat">${esc(s.category)}</span>
+            <span class="rel-spec-cat">${showProject && s.project ? `${esc(s.project)} · ` : ''}${esc(s.category)}</span>
             <span class="rel-spec-status">${s.filled ? '✓ 已沉淀' : '○ 空模板'}</span>
             <span class="rel-spec-lines">${s.lineCount} 行</span>
             ${refCount.get(s.path) ? `<span class="rel-spec-refs">${refCount.get(s.path)} 任务用</span>` : ''}
@@ -2357,21 +2368,47 @@ function renderRelations(focused) {
         </summary>
         <div class="rel-spec-body doc">${s.content ? mdRender(s.content, false) : '<span class="dim">（空）</span>'}</div>
       </details>`;
-      const allSpecs = [...specMap.values()];
-      const filledSpecs = allSpecs.filter(s => s.filled);
-      const emptySpecs = allSpecs.filter(s => !s.filled);
-      html += `<div class="rel-board-group">
-        <div class="rel-board-group-h rel-board-group-toggle" data-group="__specs__" title="展开/收起">
-          <span class="rel-board-caret">${specCollapsed ? '▸' : '▾'}</span>
-          <span class="rel-board-group-dot" style="background:#4aa3ff"></span>
-          <span class="rel-board-group-name">项目规范</span>
-          <span class="rel-board-group-count">已沉淀 ${filledSpecs.length} · 空 ${emptySpecs.length}</span>
-        </div>
-        ${specCollapsed ? '' : `
-          ${filledSpecs.length ? `<div class="rel-spec-sub-label">已沉淀规范（${filledSpecs.length}）· 项目经验沉淀</div><div class="rel-spec-grid">${filledSpecs.map(specCard).join('')}</div>` : ''}
-          ${emptySpecs.length ? `<details class="rel-spec-empty-group"><summary>空模板规范（${emptySpecs.length}）· 待填充 ▸</summary><div class="rel-spec-grid">${emptySpecs.map(specCard).join('')}</div></details>` : ''}
-        `}
-      </div>`;
+      /* 渲染按 category 聚合的组（分类组默认全部展开），组内 spec 卡片 */
+      const renderCatGrid = (specs, expandPreview, showProject) => {
+        const filledSpecs = specs.filter(s => s.filled);
+        const emptySpecs = specs.filter(s => !s.filled);
+        return (filledSpecs.length ? `<div class="rel-spec-sub-label">已沉淀（${filledSpecs.length}）</div><div class="rel-spec-grid">${filledSpecs.map(s => specCard(s, expandPreview, showProject)).join('')}</div>` : '')
+          + (emptySpecs.length ? `<details class="rel-spec-empty-group"><summary>空模板（${emptySpecs.length}）· 待填充 ▸</summary><div class="rel-spec-grid">${emptySpecs.map(s => specCard(s, expandPreview, showProject)).join('')}</div></details>` : '');
+      };
+      /* 渲染一个 category 组：分类组默认展开，组内是 spec 网格 */
+      const renderCatGroup = (cat, specs, gridHtml) => {
+        const gkey = `__cat_${cat}__`;
+        const gcollapsed = relCollapsed.has(gkey);   /* 分类组默认展开 */
+        const filledCount = specs.filter(s => s.filled).length;
+        html += `<div class="rel-board-group">
+          <div class="rel-board-group-h rel-board-group-toggle" data-group="${esc(gkey)}" title="展开/收起">
+            <span class="rel-board-caret">${gcollapsed ? '▸' : '▾'}</span>
+            <span class="rel-board-group-dot" style="background:#4aa3ff"></span>
+            <span class="rel-board-group-name">${esc(cat)}</span>
+            <span class="rel-board-group-count">${filledCount} 已沉淀</span>
+          </div>
+          ${gcollapsed ? '' : gridHtml}
+        </div>`;
+      };
+      /* 聚合 spec，附上所属项目名（全部项目时在卡片上标明） */
+      const allSpecsWithProject = [];
+      for (const name of specNames) {
+        const pSpecs = state.specsByProject[name] || [];
+        for (const s of pSpecs) allSpecsWithProject.push({ ...s, project: name });
+      }
+      const byCat = new Map();   // cat -> [spec]
+      for (const s of allSpecsWithProject) {
+        const cat = s.category || '未分类';
+        if (!byCat.has(cat)) byCat.set(cat, []);
+        byCat.get(cat).push(s);
+      }
+      /* 单一项目：preview 默认展开；全部项目：preview 收起，卡片上标明项目 */
+      const expandPreview = !!state.filter;
+      const showProject = !state.filter;
+      for (const cat of [...byCat.keys()].sort()) {
+        const cs = byCat.get(cat);
+        renderCatGroup(cat, cs, renderCatGrid(cs, expandPreview, showProject));
+      }
     }
   }
 
@@ -2451,17 +2488,20 @@ function renderRelations(focused) {
           <div class="rel-board-cards">${g.members.map(card).join('')}</div>
         </div>`;
       }
-      /* 共享规范区（被 ≥2 任务引用的 spec） */
+      /* 共享规范区（被 ≥2 任务引用的 spec）；组头支持点击预览 spec 的 md 文档 */
       for (const g of sharedSpecGroups) {
         const col = REL_SPEC_COLORS[specColorIndex(g.ref)];
         const refName = g.ref.split('/').pop();
-        html += `<div class="rel-board-group">
-          <div class="rel-board-group-h">
+        const spec = state.specsByProject[g.members[0].project]?.find(s => s.path === g.ref);
+        html += `<div class="rel-board-group" data-spec-preview-group="${esc(g.ref)}">
+          <div class="rel-board-group-h rel-board-group-toggle" data-group="${esc(g.ref)}" title="展开/收起">
+            <span class="rel-board-caret">${relCollapsed.has(g.ref) ? '▸' : '▾'}</span>
             <span class="rel-board-group-dot" style="background:${col}"></span>
             <span class="rel-board-group-name" title="${esc(g.ref)}">共享规范 · ${esc(refName)}</span>
-            <span class="rel-board-group-count">${g.members.length} 任务</span>
+            <span class="rel-board-group-count">${g.members.length} 任务${spec ? ` · <button type="button" class="rel-spec-preview-btn" data-spec-preview="${esc(g.ref)}" data-project="${esc(g.members[0].project)}" title="预览规范 md 文档">预览 ▾</button>` : ''}</span>
           </div>
-          <div class="rel-board-cards">${g.members.map(card).join('')}</div>
+          <div class="rel-spec-preview-body" hidden></div>
+          ${relCollapsed.has(g.ref) ? '' : `<div class="rel-board-cards">${g.members.map(card).join('')}</div>`}
         </div>`;
       }
     }
@@ -2609,6 +2649,29 @@ function renderRelations(focused) {
       renderRelations(currentFocus());
     };
   });
+  /* 共享规范预览：点击「预览」按钮加载 spec 的 md 文档渲染到组内 */
+  body.querySelectorAll('.rel-spec-preview-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const project = btn.dataset.project;
+      const ref = btn.dataset.specPreview;
+      const group = btn.closest('[data-spec-preview-group]');
+      if (!group) return;
+      const bodyEl = group.querySelector('.rel-spec-preview-body');
+      if (!bodyEl) return;
+      if (!bodyEl.hidden) { bodyEl.hidden = true; btn.textContent = '预览 ▾'; return; }
+      const specs = state.specsByProject[project] || [];
+      const spec = specs.find(s => ref === s.path || ref.endsWith(s.path) || s.path.endsWith(ref)) ||
+        specs.find(s => ref && s.path && ref.split('/').pop() === s.path.split('/').pop());
+      if (spec) {
+        bodyEl.innerHTML = `<div class="rel-spec-preview-doc doc">${mdRender(spec.content || '', false)}</div>`;
+      } else {
+        bodyEl.innerHTML = '<div class="rel-link-row dim">未找到该规范内容</div>';
+      }
+      bodyEl.hidden = false;
+      btn.textContent = '收起 ▴';
+    };
+  });
   /* 关联网络节点：点设中心（查看详情），shift+点聚焦 */
   body.querySelectorAll('.rel-link-node').forEach(node => {
     node.onclick = (e) => {
@@ -2663,12 +2726,16 @@ function toggleAutoFollow() {
 /* ---------- 胶囊：灵动岛紧凑态 + 展开态 ---------- */
 let lastCapRuntimeState = null;
 let lastCapsuleWindowExpanded = null;
+let capCapCollapseT = null;   /* pointerout 收起防抖定时器 */
 let capsuleWindowResizeChain = Promise.resolve();
 let modeTransitioning = false;
 function syncCapsuleWindow() {
   if (!hasTauri || state.mode !== 'capsule' || modeTransitioning) return;
   const cap = $('capsule');
   const expanded = !!cap && (cap.classList.contains('is-expanded') || cap.classList.contains('menu-open'));
+  /* 舞台高度跟随展开态，避免 CSS 默认 40px 与窗口 136px 错位 */
+  const world = $('world');
+  if (world) world.style.height = expanded ? '136px' : '40px';
   if (expanded === lastCapsuleWindowExpanded) return;
   lastCapsuleWindowExpanded = expanded;
   capsuleWindowResizeChain = capsuleWindowResizeChain
@@ -2696,6 +2763,7 @@ function renderCapsule(t, projectActivity) {
   if (!show) {
     cap.classList.remove('is-expanded', 'menu-open');
     lastCapsuleWindowExpanded = null;
+    if (capCapCollapseT) { clearTimeout(capCapCollapseT); capCapCollapseT = null; }
     const pop = $('capMenuPop');
     if (pop) pop.hidden = true;
     const btn = $('btnCapMenu');
@@ -2704,6 +2772,7 @@ function renderCapsule(t, projectActivity) {
   }
 
   let displayState = 'idle';
+  let rt = null;   /* 主任务 runtime view，供收缩态工具 badge 读取 */
   let title = '暂无活跃任务';
   let semanticActivity = '没有进行中的任务';
   let rawActivity = '';
@@ -2717,7 +2786,7 @@ function renderCapsule(t, projectActivity) {
   let progressTitle = '';
 
   if (t) {
-    const rt = runtimeViewForTask(t);
+    rt = runtimeViewForTask(t);
     const archiveReceipt = archiveReceiptFor(keyOf(t));
     displayState = rt.displayState || 'idle';
     kind = capsuleKindFor(displayState, t.kind);
@@ -2800,6 +2869,14 @@ function renderCapsule(t, projectActivity) {
   }
   $('capTitle').textContent = title;
   $('capTitle').title = title;
+  /* 收缩态实时显示当前工具：主任务用 rt.agent.toolName，项目级用 projectActivity.toolName */
+  const toolBadge = $('capToolBadge');
+  const toolName = (t && rt && rt.agent && rt.agent.toolName) || (projectActivity && projectActivity.toolName) || '';
+  if (toolBadge) {
+    toolBadge.textContent = toolName;
+    toolBadge.hidden = !toolName;
+    toolBadge.title = toolName ? `当前工具 · ${toolName}` : '';
+  }
   const capsuleActivity = rawActivity || semanticActivity;
   $('capActivity').textContent = capsuleActivity;
   /* 项目标识：始终展示当前所在项目，空闲态显示全部/未接入 */
@@ -2848,7 +2925,10 @@ function renderCapsule(t, projectActivity) {
   }
   if (previewTitle) previewTitle.textContent = title;
   if (previewActivity) previewActivity.textContent = capsuleActivity;
-  if (previewExcerptEl) previewExcerptEl.textContent = previewExcerpt || capsuleActivity;
+  if (previewExcerptEl) {
+    /* 展开态详情支持 markdown：excerpt/description 用 marked 解析渲染 */
+    previewExcerptEl.innerHTML = mdRender(previewExcerpt || capsuleActivity);
+  }
 
   /* 未读 badge：manual lock / 关闭自动跟随时的被拒实时活动 */
   const badge = $('capBadge');
@@ -2898,14 +2978,18 @@ function syncCapMenu() {
     if (mark) mark.textContent = state.alwaysOnTop ? '开' : '关';
   }
 }
-function toggleCapMenu(force) {
+async function toggleCapMenu(force) {
   const pop = $('capMenuPop');
   const btn = $('btnCapMenu');
   if (!pop || !btn) return;
   const target = force !== undefined ? force : pop.hidden;
-  pop.hidden = !target;
   const cap = $('capsule');
-  if (cap) cap.classList.toggle('menu-open', target);
+  /* 先加 menu-open 类：CSS 立即切到 136px 布局，窗口 resize 链随后跟上。
+     菜单 pop 要等窗口真正到 136px 后再显示，避免被 40px 紧凑窗口裁切。 */
+  if (cap) {
+    cap.classList.toggle('menu-open', target);
+    if (target && capCapCollapseT) { clearTimeout(capCapCollapseT); capCapCollapseT = null; }
+  }
   syncCapsuleWindow();
   btn.classList.toggle('on', target);
   btn.setAttribute('aria-expanded', String(target));
@@ -2913,8 +2997,19 @@ function toggleCapMenu(force) {
     /* 与主卡菜单一致：记录触发按钮，焦点进入第一个菜单项 */
     focusReturnTo = btn;
     syncCapMenu();
-    setTimeout(() => moveFocusInto(pop), 50);
+    /* 等展开窗口的 IPC 完成后再揭晓菜单（resize 链串行，天然防抖）。
+       await 期间可能被快速连点切到关闭态，需校验 menu-open 仍存在再显示。 */
+    try {
+      await capsuleWindowResizeChain;
+    } catch (e) {
+      /* resize 失败不阻塞菜单 */
+    }
+    if (cap && cap.classList.contains('menu-open')) {
+      pop.hidden = false;
+      setTimeout(() => moveFocusInto(pop), 50);
+    }
   } else {
+    pop.hidden = true;
     restoreFocus();
   }
 }
@@ -2941,11 +3036,17 @@ async function setMode(mode) {
       const mp = $('menuPop');
       if (mp) mp.hidden = true;
       toggleCapMenu(false);
-      /* 后端 set_window_mode('capsule') 仍把窗口设为 136px；CSS 以 62px 紧凑渲染，
-         进入后主动收回，避免顶部/底部留白。 */
+      /* 舞台高度归位：清掉 card 模式 fit 残留的内联高度，紧凑态 40px 由 CSS 兜底。
+         展开/收合时 syncCapsuleWindow 会再同步为 40/136。 */
+      const w = $('world');
+      if (w) { w.style.height = '40px'; w.style.maxHeight = ''; }
+      /* 后端 set_window_mode('capsule') 已直接设紧凑 40px；CSS 以 40px 紧凑渲染，
+         无需再主动收回。 */
       await call('set_capsule_expanded', { expanded: false }).catch((e) => report('set_capsule_expanded', e));
     } else {
       toggleCapMenu(false);
+      const w = $('world');
+      if (w) { w.style.height = ''; w.style.maxHeight = ''; }
     }
     render();
     return true;
@@ -3467,7 +3568,7 @@ async function onTasksChanged({ urgent = false, project = null } = {}) {
     }
     state.subOpen = null;
     toast(`新任务：${t.title || t.id}`);
-    if (state.mode === 'capsule') await setMode('card');   /* 胶囊模式自动弹回 */
+    /* 保持胶囊态：任务变化时不弹回卡片，胶囊收缩态实时更新工具/活动 */
   }
   /* 事件变更可能含外部 task.py archive（不经前端 archive_task）：归档缓存需失效重拉，
      否则显示归档时新归档任务停留在旧缓存。showArchived 开启时刷新受影响项目。 */
@@ -3757,18 +3858,26 @@ function bindUI() {
     const cap = $('capsule');
     if (cap) {
       const expand = () => {
+        if (capCapCollapseT) { clearTimeout(capCapCollapseT); capCapCollapseT = null; }
         cap.classList.add('is-expanded');
         syncCapsuleWindow();
       };
       const collapseIfOutside = (e) => {
+        if (cap.classList.contains('menu-open')) return;   /* 菜单打开期间锁定展开态 */
         if (e.relatedTarget && cap.contains(e.relatedTarget)) return;
-        cap.classList.remove('is-expanded');
-        syncCapsuleWindow();
+        /* 120ms 防抖：指针短暂扫过边缘不触发收起抖动（窗口 resize 抖动） */
+        if (capCapCollapseT) clearTimeout(capCapCollapseT);
+        capCapCollapseT = setTimeout(() => {
+          capCapCollapseT = null;
+          cap.classList.remove('is-expanded');
+          syncCapsuleWindow();
+        }, 120);
       };
       cap.addEventListener('pointerover', expand);
       cap.addEventListener('pointerout', collapseIfOutside);
       cap.addEventListener('focusin', expand);
       cap.addEventListener('focusout', (e) => {
+        if (cap.classList.contains('menu-open')) return;   /* 菜单打开期间锁定展开态 */
         requestAnimationFrame(() => {
           if (!cap.contains(document.activeElement) && !(e.relatedTarget && cap.contains(e.relatedTarget))) {
             cap.classList.remove('is-expanded');
@@ -3805,8 +3914,6 @@ function bindUI() {
       toggleCapMenu();
     };
   }
-  const btnCapToCard = $('btnCapToCard');
-  if (btnCapToCard) btnCapToCard.onclick = (e) => { e.stopPropagation(); toggleCapMenu(false); setMode('card'); };
   const btnCapLock = $('btnCapLock');
   if (btnCapLock) {
     btnCapLock.onclick = (e) => {
@@ -3840,6 +3947,12 @@ function bindUI() {
       });
     };
   }
+  const btnCapSnap = $('btnCapSnap');
+  if (btnCapSnap) btnCapSnap.onclick = (e) => {
+    e.stopPropagation();
+    if (hasTauri) call('snap_window_top').catch((err) => report('snap_window_top', err));
+    toggleCapMenu(false);
+  };
   const btnCapHide = $('btnCapHide');
   if (btnCapHide) btnCapHide.onclick = (e) => { e.stopPropagation(); toggleCapMenu(false); hideWindow(); };
 
@@ -3976,6 +4089,13 @@ async function boot() {
   /* 事件订阅在首屏 refresh 前注册：消除「首屏 render 完成 → 订阅就绪」之间的
      丢事件窗口期。bindWatch 只注册 listen，不依赖 refresh 结果或 main DOM。 */
   bindWatch();
+  /* 去除窗口外框兜底：tauri.conf 已设 decorations:false，这里动态再设一次，
+     确保任何平台（含 Windows）无边框 + 透明，交由前端 data-tauri-drag-region 拖动。 */
+  if (hasTauri && window.__TAURI__.window) {
+    try {
+      window.__TAURI__.window.getCurrentWindow().setDecorations(false);
+    } catch (e) { /* 已无边框时静默 */ }
+  }
   if (state.configured) {
     state.view = 'main';
     $('setup').hidden = true;

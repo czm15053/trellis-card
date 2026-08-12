@@ -27,6 +27,9 @@ body{
   overflow:hidden;user-select:none;
   -webkit-font-smoothing:antialiased;
 }
+/* 文字不可选中/复制兜底：选中无高亮，标题/header/胶囊正文显式禁选 */
+::selection{background:transparent;color:inherit}
+.card,.title,.card-grab,.cap-body,.cap-title,.cap-activity,.cap-preview{user-select:none;-webkit-user-select:none}
 
 /* ---------- 全窗舞台：完全透明，只留卡片本体浮在桌面上 ---------- */
 .world{
@@ -52,8 +55,49 @@ body{
 .star i{width:5px;height:5px;border-radius:50%;background:var(--c,var(--amber));box-shadow:0 0 8px var(--c,var(--amber))}
 
 /* ---------- 主卡顶栏：Project chip · List · Menu · Detail ---------- */
+/* 顶部 header：状态灯 + 项目名 + 空白拖动区 + meter 进度（对齐原 .head observe-head）。
+   整体 data-tauri-drag-region：led/项目名/meter 周围背景可拖动。
+   全是不可交互元素（纯 span），不拦截拖动；led pointer-events:none。 */
+.card-grab{
+  flex-shrink:0;height:34px;width:100%;position:relative;z-index:5;
+  display:flex;align-items:center;padding:0 10px;cursor:grab;
+}
+.card-grab:hover{background:radial-gradient(circle at center,color-mix(in srgb,var(--accent) 18%,transparent) 0 1px,transparent 2px) center/4px 4px repeat}
+/* 状态灯：绝对定位左侧（不占居中组空间） */
+.grab-led{
+  position:absolute;left:12px;top:50%;transform:translateY(-50%);
+  width:8px;height:8px;border-radius:50%;pointer-events:none;
+  background:var(--accent,var(--amber));box-shadow:0 0 8px var(--accent,var(--amber));
+}
+.grab-led[data-state="working"]{animation:observeBeat var(--pulse-slow) ease-in-out infinite}
+.grab-led[data-state="blocked"],.grab-led[data-state="failed"]{background:var(--rose);box-shadow:0 0 8px var(--rose)}
+.grab-led[data-state="waiting_permission"],.grab-led[data-state="waiting_question"]{background:#e7c56a;box-shadow:0 0 8px #e7c56a}
+.grab-led[data-state="completed"],.grab-led[data-state="turn_done"]{background:var(--mint);box-shadow:0 0 8px var(--mint)}
+.grab-led[data-state="idle"]{background:var(--dim);box-shadow:0 0 6px var(--dim)}
+/* 项目名居中：margin:auto 让 project 单独水平居中（led 左、meter 右不参与） */
+.grab-center{
+  display:flex;align-items:center;margin:0 auto;max-width:60%;
+  min-width:0;cursor:grab;
+}
+/* 项目名：大写等宽，13px */
+.grab-project{
+  flex:none;max-width:100%;color:var(--mist);cursor:grab;
+  font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+/* meter 进度：绝对定位右侧（与 led 左侧对称），不占居中 */
+.grab-meter{
+  position:absolute;right:12px;top:50%;transform:translateY(-50%);
+  display:inline-flex;align-items:center;gap:8px;cursor:grab;
+}
+.grab-meter .ticks{display:inline-flex;gap:3px}
+.grab-meter .ticks i{width:10px;height:3.5px;border-radius:2px;transform:skewX(-14deg);background:color-mix(in srgb,var(--chalk) 9%,transparent)}
+.grab-meter .ticks i.f{background:var(--mint);box-shadow:0 0 6px rgba(69,196,160,.45)}
+.grab-meter .ticks i.c{background:var(--accent);box-shadow:0 0 8px color-mix(in srgb,var(--accent) 60%,transparent);animation:segPulse 2s ease-in-out infinite}
+.grab-meter .score{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--chalk);font-variant-numeric:tabular-nums}
+.grab-meter .score em{font-style:normal;color:var(--dim);font-size:10px}
 .card-topbar{
-  position:absolute;top:0;left:10px;right:10px;z-index:4;
+  position:absolute;top:34px;left:10px;right:10px;z-index:4;
   display:flex;align-items:center;justify-content:space-between;gap:8px;
   pointer-events:none;
 }
@@ -67,12 +111,13 @@ body{
 .proj-chip:hover,.proj-chip.on{color:var(--chalk);border-color:color-mix(in srgb,var(--accent,var(--amber)) 40%,var(--line2))}
 .proj-chip-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .proj-chip-caret{display:inline-flex;align-items:center;opacity:.7}
-.topbar-actions{display:flex;align-items:center;gap:4px}
+.topbar-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
 .iconbtn{
   font-family:var(--mono);font-size:10px;font-weight:700;line-height:1;
   color:var(--dim);background:rgba(15,17,25,.72);border:1px solid var(--line);
   border-radius:999px;padding:5px 9px;cursor:pointer;transition:.18s;backdrop-filter:blur(8px);
   display:inline-flex;align-items:center;justify-content:center;gap:5px;
+  white-space:nowrap;flex-shrink:0;   /* 图标+文字始终单行，不被挤窄换行 */
 }
 .iconbtn .lucide{flex:0 0 auto}
 .iconbtn:hover,.iconbtn.on{color:var(--chalk);border-color:color-mix(in srgb,var(--accent,var(--amber)) 40%,var(--line2))}
@@ -139,7 +184,7 @@ body{
 /* ---------- 胶囊模式：固定 360×136 分区面板 ---------- */
 .capsule{
   display:none;position:relative;flex-direction:column;
-  width:360px;height:136px;box-sizing:border-box;
+  width:360px;height:40px;box-sizing:border-box;
   padding:0;border-radius:18px;border:1px solid var(--line2);overflow:hidden;
   background:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='.05'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E"),
@@ -149,6 +194,9 @@ body{
   --accent:var(--dim);
 }
 .capsule.show{display:flex}
+/* 两态高度：默认 40px 紧凑；hover/menu 展开 136px。不做 CSS height transition（与原生 set_size 竞态）。 */
+.capsule.is-expanded,
+.capsule.menu-open{height:136px}
 .capsule:hover{border-color:color-mix(in srgb,var(--accent) 38%,var(--line2));box-shadow:0 18px 40px rgba(0,0,0,.5),0 0 48px color-mix(in srgb,var(--accent) 20%,transparent)}
 .cap-body:active{transform:scale(.995)}
 .capsule[data-kind="plan"]{--accent:var(--violet)}
@@ -180,9 +228,27 @@ body{
 }
 .cap-menu-btn:hover,.cap-menu-btn.on{color:var(--chalk);background:color-mix(in srgb, var(--chalk) 4%, transparent)}
 .cap-body{
-  position:relative;flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center;
-  gap:5px;padding:8px 12px 10px;cursor:pointer;
+  position:relative;flex:1;min-height:0;display:flex;flex-direction:row;align-items:center;
+  gap:7px;padding:4px 12px;cursor:pointer;
 }
+.capsule.is-expanded .cap-body,
+.capsule.menu-open .cap-body{flex-direction:column;justify-content:center;gap:5px;padding:8px 12px 10px}
+/* 紧凑态单行密度：orb+state+title；展开态淡入三行内容 */
+.capsule:not(.is-expanded):not(.menu-open) .cap-activity,
+.capsule:not(.is-expanded):not(.menu-open) .cap-bar,
+.capsule:not(.is-expanded):not(.menu-open) .cap-preview,
+.capsule:not(.is-expanded):not(.menu-open) .cap-project,
+.capsule:not(.is-expanded):not(.menu-open) .cap-progress{display:none}
+.capsule:not(.is-expanded):not(.menu-open) .cap-status{order:-1;margin-left:0;max-width:58%;min-width:0}
+.capsule:not(.is-expanded):not(.menu-open) .cap-state{display:none}
+.capsule:not(.is-expanded):not(.menu-open) .cap-title{flex:1 1 auto;min-width:0;margin:0;white-space:nowrap;text-overflow:ellipsis;-webkit-mask-image:none;mask-image:none}
+.capsule.is-expanded .cap-title,
+.capsule.menu-open .cap-title{flex:0 0 auto}
+.capsule.is-expanded .cap-activity,
+.capsule.is-expanded .cap-bar,
+.capsule.menu-open .cap-activity,
+.capsule.menu-open .cap-bar{animation:capReveal .2s var(--ease)}
+@keyframes capReveal{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
 .cap-status{display:flex;align-items:center;gap:7px;min-width:0}
 .capsule .orb{
   width:11px;height:11px;border:1px solid transparent;border-radius:50%;flex-shrink:0;position:relative;
@@ -257,6 +323,17 @@ body{
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.25;
   -webkit-mask-image:linear-gradient(90deg,#000 0 calc(100% - 22px),transparent 100%);mask-image:linear-gradient(90deg,#000 0 calc(100% - 22px),transparent 100%);
 }
+/* 收缩态实时工具 badge：当前工具名，仅收缩态显示 */
+.cap-toolbadge{
+  flex-shrink:0;font-family:var(--mono);font-size:9px;font-weight:700;
+  color:color-mix(in srgb,var(--accent) 85%,#fff);
+  background:color-mix(in srgb,var(--accent) 14%,transparent);
+  border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);
+  border-radius:999px;padding:1px 7px;line-height:1.5;
+  white-space:nowrap;text-shadow:0 0 6px color-mix(in srgb,var(--accent) 40%,transparent);
+}
+.capsule:not(.is-expanded):not(.menu-open) .cap-toolbadge{display:inline-block}
+.capsule.is-expanded .cap-toolbadge,.capsule.menu-open .cap-toolbadge{display:none}
 .cap-activity{
   font-family:var(--mono);font-size:10.5px;color:var(--mist);
   display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
@@ -286,17 +363,16 @@ body{
 /* 紧凑网格菜单：5 项必须完整落在 360×136 视口内，不被 overflow:hidden 裁切 */
 .cap-menu-pop{
   position:absolute;top:20px;left:8px;right:8px;bottom:8px;z-index:8;
-  display:grid;grid-template-columns:1fr 1fr;grid-template-rows:repeat(3,minmax(0,1fr));
+  display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr;
   gap:4px;padding:6px;box-sizing:border-box;
   border-radius:12px;border:1px solid var(--line2);
   background:linear-gradient(180deg,#181b26f8,#10131bfa);
   box-shadow:0 12px 28px rgba(0,0,0,.55);
 }
-.cap-menu-pop .cap-tool:first-child{grid-column:1 / -1} /* 回到卡片通栏 */
 .cap-tool{
-  font-family:var(--mono);font-size:9.5px;font-weight:600;text-align:left;
+  font-family:var(--mono);font-size:10px;font-weight:600;text-align:left;
   color:var(--mist);background:color-mix(in srgb, var(--chalk) 3%, transparent);border:1px solid var(--line);
-  border-radius:8px;padding:5px 7px;cursor:pointer;min-height:0;
+  border-radius:8px;padding:2px 8px;cursor:pointer;min-height:24px;height:auto;
   display:flex;align-items:center;justify-content:space-between;gap:4px;
   overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
 }
@@ -308,17 +384,20 @@ body{
 .cap-tool[aria-pressed="true"]{color:var(--chalk);border-color:color-mix(in srgb,var(--amber) 40%,var(--line2));background:color-mix(in srgb,var(--amber) 12%,transparent)}
 .cap-tool.danger:hover{color:#f5a8ad}
 
-body[data-mode="capsule"] .world{justify-content:center;align-items:center;padding:0;border-radius:18px;width:min(360px,100vw);height:136px}
+body[data-mode="capsule"] .world{justify-content:center;align-items:center;padding:0;border-radius:0;width:min(360px,100vw);height:40px;overflow:visible}
+/* 展开态舞台高度跟随胶囊；JS 也会在 syncCapsuleWindow 内联覆盖（浏览器预览靠 :has 兜底） */
+body[data-mode="capsule"] .world:has(.capsule.is-expanded,.capsule.menu-open){height:136px}
 body[data-mode="capsule"] .main-view{flex:none;justify-content:center;width:100%;height:100%}
 body[data-mode="capsule"] .card{display:none}
 @media (prefers-reduced-motion:reduce){
   .capsule.pulse .orb,.capsule.pulse .orb::after{animation:none}
+  .capsule .cap-activity,.capsule .cap-bar{animation:none!important}
 }
 @media (max-width:320px){
   body[data-mode="capsule"] .world{width:100vw}
   .capsule{width:100vw;border-radius:14px}
-  .cap-bar{display:none}
-  .cap-body{gap:6px;padding:8px 10px}
+  .capsule:not(.is-expanded):not(.menu-open) .cap-body{gap:6px;padding:4px 10px}
+  .capsule.is-expanded .cap-body,.capsule.menu-open .cap-body{gap:6px;padding:8px 10px}
   .cap-title{font-size:12px}
 }
 @media (max-width:180px){
@@ -473,7 +552,7 @@ body.fit.admin-open .card,body.fit.admin-open .card[data-kind="idle"]{flex:1;min
 @keyframes throb{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 45%,transparent)}50%{box-shadow:0 0 0 5px transparent}}
 
 /* ---------- 卡片主体 ---------- */
-.main{padding:10px 15px 0 14px;min-width:0;display:flex;flex-direction:column;flex:1;min-height:0}
+.main{padding:36px 15px 0 14px;min-width:0;display:flex;flex-direction:column;flex:1;min-height:0}
 .pane{display:flex;flex-direction:column;flex:1;min-height:0}
 
 /* 刊头行：项目名 + 阶段刻度 */
@@ -493,11 +572,11 @@ body.fit.admin-open .card,body.fit.admin-open .card[data-kind="idle"]{flex:1;min
 .score{font-family:var(--mono);font-size:10.5px;font-weight:700;color:var(--chalk);font-variant-numeric:tabular-nums}
 .score em{font-style:normal;color:var(--dim);font-size:9px}
 
-/* 标本标题 */
+/* 标本标题：居中 + 大气（单行截断不变） */
 .title{
-  margin:9px 0 0;font-family:var(--serif);font-size:20px;font-weight:600;
-  letter-spacing:-.01em;line-height:1.24;color:var(--chalk);
-  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  margin:9px 0 0;font-family:var(--serif);font-size:21px;font-weight:650;
+  letter-spacing:.01em;line-height:1.24;color:var(--chalk);
+  text-align:center;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;
 }
 /* 观测台时间线：真实时间戳派生的会话活动流，固定高度不撑高卡片 */
 .observe-timeline{
@@ -720,6 +799,9 @@ body.fit .sheet.settings #adminBody{overflow:auto;flex:1 1 auto;min-height:0}
 .sheet.open{transform:none;opacity:1;pointer-events:auto}
 .sheet::before{content:"";position:absolute;top:7px;left:50%;transform:translateX(-50%);width:30px;height:3px;border-radius:99px;background:var(--line2)}
 .list-h{flex-shrink:0;padding:12px 14px 5px;font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);display:flex;justify-content:space-between;align-items:center}
+/* 关联页 header 可拖动：data-tauri-drag-region + grab 光标；收起按钮是可点元素不拦截 */
+#relations .list-h{cursor:grab}
+#relations .list-h .sheet-close{cursor:pointer}
 .sheet-h-right{display:inline-flex;align-items:center;gap:8px}
 .sheet-close{flex-shrink:0}
 /* 「显示已归档」勾选框：列表右上角，紧凑 mono 风格 */
@@ -1035,7 +1117,7 @@ body.rel-canvas .rel-graph{
 .rel-board-group-toggle:hover{background:color-mix(in srgb,var(--chalk) 5%,transparent)}
 .rel-board-group-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rel-board-group-count,.rel-board-group-pct{font-size:8.5px;color:var(--dim);flex-shrink:0}
-.rel-board-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;padding:8px}
+.rel-board-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:6px;padding:8px}
 /* 独立任务组内的时间桶（二级 label） */
 .rel-board-time-buckets{display:flex;flex-direction:column}
 .rel-board-time-bucket{padding:6px 8px 2px}
@@ -1115,7 +1197,7 @@ body.rel-canvas .rel-graph{
 }
 
 /* 项目规范地图：trellis-update-spec 沉淀的团队规范（可展开正文） */
-.rel-spec-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:8px}
+.rel-spec-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px;padding:8px}
 .rel-spec-item{
   border:1px solid color-mix(in srgb,var(--line2) 55%,transparent);border-radius:8px;
   background:color-mix(in srgb,var(--chalk) 1.5%,transparent);
@@ -1142,6 +1224,21 @@ body.rel-canvas .rel-graph{
   font-size:10.5px;line-height:1.5;color:var(--chalk);
   max-height:280px;overflow:auto;
 }
+/* 共享规范预览：组内展开的 md 文档预览 */
+.rel-spec-preview-btn{
+  font-family:var(--mono);font-size:8px;font-weight:600;color:var(--violet);
+  background:transparent;border:0;cursor:pointer;padding:0 2px;margin-left:4px;
+}
+.rel-spec-preview-btn:hover{color:var(--chalk)}
+.rel-spec-preview-body{
+  padding:8px 10px;border-top:1px solid var(--line2);
+  font-size:10.5px;line-height:1.5;color:var(--chalk);
+  max-height:320px;overflow:auto;
+}
+.rel-spec-preview-doc.doc p{margin:0 0 6px}
+.rel-spec-preview-doc.doc h1,.rel-spec-preview-doc.doc h2,.rel-spec-preview-doc.doc h3,
+.rel-spec-preview-doc.doc h4{font-size:12px;font-weight:700;margin:0 0 4px;color:var(--chalk)}
+.rel-spec-preview-doc.doc code{font-family:var(--mono);font-size:10px;background:color-mix(in srgb,var(--chalk) 6%,transparent);border-radius:3px;padding:0 3px}
 /* rel-spec-body 复用 .doc 的 markdown 排版，但保留卡片体的布局属性 */
 .rel-spec-body.doc{
   flex:none;min-height:0;overflow:auto;

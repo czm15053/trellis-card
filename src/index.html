@@ -51,6 +51,7 @@
       </div>
       <div class="cap-body" id="capBody" role="button" tabindex="0" aria-label="打开完整任务卡片" title="点击回到卡片">
         <div class="cap-title" id="capTitle">—</div>
+        <span class="cap-toolbadge" id="capToolBadge" hidden></span>
         <div class="cap-activity" id="capActivity">—</div>
         <div class="cap-status">
           <span class="orb" id="capOrb"></span>
@@ -73,18 +74,26 @@
         </div>
       </div>
       <div class="cap-menu-pop" id="capMenuPop" hidden>
-        <button type="button" class="cap-tool" id="btnCapToCard">回到卡片</button>
         <button type="button" class="cap-tool" id="btnCapLock" aria-pressed="false">锁定当前任务</button>
         <button type="button" class="cap-tool setting" id="btnCapAutoFollow" role="switch" aria-checked="true"><span>自动跟随</span><i aria-hidden="true">开</i></button>
         <button type="button" class="cap-tool setting" id="btnCapTop" role="switch" aria-checked="false"><span>窗口置顶</span><i aria-hidden="true">关</i></button>
+        <button type="button" class="cap-tool" id="btnCapSnap">吸附顶部</button>
         <button type="button" class="cap-tool danger" id="btnCapHide">隐藏</button>
       </div>
     </div>
 
     <article class="card" id="card" data-kind="idle">
-      <div class="dragbar" data-tauri-drag-region title="拖动移动窗口"></div>
-
-      <!-- 顶栏：Project chip · List · Menu · Detail（避开拖动区中心） -->
+      <!-- 顶部 header：蝴蝶灯 + 项目名纯文本 + 空白拖动区 + 进度条。
+           整体 data-tauri-drag-region：led/项目名/进度条周围背景可拖动；
+           项目名是纯 span，不拦截拖动；蝴蝶灯 pointer-events:none 穿透。 -->
+      <div class="card-grab" data-tauri-drag-region title="拖动移动窗口">
+        <span class="grab-led" id="grabLed" aria-hidden="true" data-state="idle"></span>
+        <span class="grab-center">
+          <span class="grab-project" id="grabProjectName" title="当前项目">全部项目</span>
+        </span>
+        <span class="grab-meter" id="grabMeter" title="任务进度"><span class="ticks"><i></i><i></i><i></i><i></i></span><span class="score">—</span></span>
+      </div>
+      <!-- 顶栏：项目筛选 · List · Menu · Detail -->
       <div class="card-topbar" id="cardTopbar">
         <button type="button" class="proj-chip" id="btnProjectChip" aria-expanded="false" aria-controls="projectPop" title="筛选项目">
           <span class="proj-chip-label" id="projectChipLabel">全部项目</span>
@@ -179,7 +188,7 @@
 
       <!-- 任务关联 sheet（共享 spec 聚类 + 属性泳道 + 父子标记） -->
       <div class="sheet list" id="relations" aria-hidden="true">
-        <div class="list-h">
+        <div class="list-h" data-tauri-drag-region title="拖动移动窗口">
           <span>任务关联</span>
           <span class="sheet-h-right">
             <span id="relationsCount">0</span>
