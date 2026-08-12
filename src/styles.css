@@ -1036,14 +1036,33 @@ body.rel-canvas .rel-graph{
 .rel-board-group-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rel-board-group-count,.rel-board-group-pct{font-size:8.5px;color:var(--dim);flex-shrink:0}
 .rel-board-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;padding:8px}
+/* 独立任务组内的时间桶（二级 label） */
+.rel-board-time-buckets{display:flex;flex-direction:column}
+.rel-board-time-bucket{padding:6px 8px 2px}
+.rel-board-time-label{
+  display:flex;align-items:center;gap:6px;
+  font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--dim);padding:2px 4px 4px;
+}
+.rel-board-time-label i{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.rel-board-time-count{font-family:var(--mono);font-size:7.5px;color:var(--dim);background:color-mix(in srgb,var(--chalk) 5%,transparent);border-radius:99px;padding:0 6px;margin-left:auto}
+.rel-board-time-bucket .rel-board-cards{padding:0 0 6px}
 .rel-board-card{
-  display:flex;flex-direction:column;gap:4px;text-align:left;
+  display:flex;flex-direction:column;gap:4px;text-align:left;position:relative;
   border:1px solid var(--line2);border-left:3px solid var(--bc,#63656e);border-radius:10px;
   padding:8px 10px;cursor:pointer;transition:.15s;
   background:color-mix(in srgb,var(--chalk) 2%,transparent);
   font-family:var(--font);
 }
 .rel-board-card:hover{border-color:color-mix(in srgb,var(--bc,#63656e) 40%,var(--line2));background:color-mix(in srgb,var(--bc,#63656e) 6%,transparent)}
+.rel-board-linkbtn{
+  position:absolute;top:4px;right:6px;display:none;
+  font-family:var(--mono);font-size:7px;color:var(--violet);
+  border:1px solid color-mix(in srgb,var(--violet) 35%,var(--line2));
+  border-radius:4px;padding:0 4px;cursor:pointer;background:rgba(15,17,25,.8);
+}
+.rel-board-card:hover .rel-board-linkbtn{display:inline-block}
+.rel-board-linkbtn:hover{background:color-mix(in srgb,var(--violet) 15%,transparent);color:var(--chalk)}
 .rel-board-card.live{
   border-color:color-mix(in srgb,var(--bc,#63656e) 60%,var(--line2));
   box-shadow:0 0 0 1px color-mix(in srgb,var(--bc,#63656e) 25%,transparent),0 4px 14px rgba(0,0,0,.3);

@@ -2307,6 +2307,7 @@ function renderRelations(focused) {
     const sessCount = (t.sessions || []).length;
     return `<button type="button" class="rel-board-card${t.archived ? ' archived' : ''}${active ? ' live' : ''}${priClass ? ' ' + priClass : ''}" data-key="${esc(keyOf(t))}" style="--bc:${statusColor}">
       <span class="rel-board-title">${active ? '<span class="live-dot" title="有活跃会话"></span>' : ''}${esc((t.title || t.id).slice(0, 34))}</span>
+      <span class="rel-board-linkbtn" data-linkkey="${esc(keyOf(t))}" title="查看此任务的关联">关联</span>
       <span class="rel-board-meta">
         <span class="rel-board-status">${esc((t.phase && t.phase.label) || t.status || '')}</span>
         ${pri ? `<span class="rel-board-pri ${priClass}">${esc(pri)}</span>` : ''}
@@ -2509,7 +2510,14 @@ function renderRelations(focused) {
         </div>`;
       }
       if (orphans.length) {
-        /* 排序：活跃 > 进行中 > 待办/卡住 > 已完成/归档（让「现在该关注」的在前面） */
+        /* 独立任务按「最近活动时间」分桶：今天 / 三天内 / 七天内 / 一个月内 / 更早。
+           组内再按状态排序（活跃 > 进行中 > 待办 > 完成）。 */
+        const taskLastTs = (t) => {
+          const rt = state.runtimeByTask.get(keyOf(t));
+          if (rt && rt.lastChangedAt) return rt.lastChangedAt * 1000;
+          if (t.mtime && t.mtime > 100_000_000_000) return t.mtime;
+          return (t.mtime || 0) * 1000;
+        };
         const stateRank = (t) => {
           const rt = state.runtimeByTask.get(keyOf(t));
           if (rt && rt.agent && rt.agent.state && rt.agent.state !== 'none' && rt.agent.state !== 'idle') return 0;
@@ -2519,15 +2527,38 @@ function renderRelations(focused) {
           if (t.status === 'completed' || t.status === 'done') return 4;
           return 5;
         };
-        const sorted = orphans.sort((a, b) => stateRank(a) - stateRank(b) || Number(a.archived) - Number(b.archived));
+        const now = Date.now();
+        const DAY = 24 * 3600 * 1000;
+        const buckets = [
+          { key: 'today', label: '今天', max: DAY, color: '#45c4a0' },
+          { key: '3d', label: '三天内', max: 3 * DAY, color: '#8b7cf6' },
+          { key: '7d', label: '七天内', max: 7 * DAY, color: '#4aa3ff' },
+          { key: '30d', label: '一个月内', max: 30 * DAY, color: '#f0a35e' },
+          { key: 'older', label: '更早', max: Infinity, color: '#63656e' },
+        ];
+        const inBucket = (t, b) => {
+          const age = Math.max(0, now - taskLastTs(t));
+          const prevMax = buckets[buckets.findIndex(x => x.key === b.key) - 1];
+          const min = prevMax ? prevMax.max : 0;
+          return age >= min && age < b.max;
+        };
+        /* 独立任务是一级组，时间桶是组内二级 label */
         html += `<div class="rel-board-group">
           <div class="rel-board-group-h">
             <span class="rel-board-group-dot" style="background:#8b7cf6"></span>
             <span class="rel-board-group-name">独立任务</span>
-            <span class="rel-board-group-count">${sorted.length}</span>
+            <span class="rel-board-group-count">${orphans.length}</span>
           </div>
-          <div class="rel-board-cards">${sorted.map(card).join('')}</div>
-        </div>`;
+          <div class="rel-board-time-buckets">`;
+        for (const b of buckets) {
+          const items = orphans.filter(t => inBucket(t, b)).sort((x, y) => stateRank(x) - stateRank(y));
+          if (!items.length) continue;
+          html += `<div class="rel-board-time-bucket">
+            <div class="rel-board-time-label"><i style="background:${b.color}"></i>${b.label}<span class="rel-board-time-count">${items.length}</span></div>
+            <div class="rel-board-cards">${items.map(card).join('')}</div>
+          </div>`;
+        }
+        html += `</div></div>`;
       }
     }
   }
@@ -2537,13 +2568,20 @@ function renderRelations(focused) {
 
   /* 看板卡片点击：聚焦该任务（显示卡片） */
   body.querySelectorAll('.rel-board-card').forEach(cardEl => {
-    cardEl.onclick = (e) => {
+    cardEl.onclick = () => {
       const key = cardEl.dataset.key;
       const t = allTasks.find(x => keyOf(x) === key);
+      if (t) focusTask(t);   /* 点击卡片 → 跳转主卡片（关闭关联视图，显示对应任务） */
+    };
+  });
+  /* 卡片上的「关联」小按钮：查看此任务的关联（不跳转主卡片） */
+  body.querySelectorAll('.rel-board-linkbtn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const key = btn.dataset.linkkey;
+      const t = allTasks.find(x => keyOf(x) === key);
       if (!t) return;
-      if (e.shiftKey) { focusTask(t); return; }   /* shift+点 = 聚焦 */
-      if (state.relCenterKey === key) { state.relCenterKey = null; }  /* 再点收起关联 */
-      else state.relCenterKey = key;
+      state.relCenterKey = key;
       renderRelations(currentFocus());
     };
   });
@@ -2901,6 +2939,9 @@ async function setMode(mode) {
       const mp = $('menuPop');
       if (mp) mp.hidden = true;
       toggleCapMenu(false);
+      /* 后端 set_window_mode('capsule') 仍把窗口设为 136px；CSS 以 62px 紧凑渲染，
+         进入后主动收回，避免顶部/底部留白。 */
+      await call('set_capsule_expanded', { expanded: false }).catch((e) => report('set_capsule_expanded', e));
     } else {
       toggleCapMenu(false);
     }
