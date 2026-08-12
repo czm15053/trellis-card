@@ -1144,6 +1144,10 @@ body.rel-canvas .rel-graph{
 .rel-board-card:hover .rel-board-linkbtn{display:inline-block}
 .rel-board-linkbtn:hover{background:color-mix(in srgb,var(--violet) 15%,transparent);color:var(--chalk)}
 .rel-board-card.live{
+  /* 覆盖全局 .live 徽章样式（活跃会话呼吸灯），恢复任务卡 flex column 布局 */
+  display:flex;flex-direction:column;gap:4px;align-items:stretch;
+  padding:8px 10px;border-radius:10px;
+  font-family:var(--font);font-size:inherit;font-weight:inherit;color:inherit;
   border-color:color-mix(in srgb,var(--bc,#63656e) 60%,var(--line2));
   box-shadow:0 0 0 1px color-mix(in srgb,var(--bc,#63656e) 25%,transparent),0 4px 14px rgba(0,0,0,.3);
   animation:relLivePulse 2s ease-in-out infinite;
