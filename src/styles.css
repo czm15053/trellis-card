@@ -58,10 +58,7 @@ body{
 /* 顶部 header：状态灯 + 项目名 + 空白拖动区 + meter 进度（对齐原 .head observe-head）。
    整体 data-tauri-drag-region：led/项目名/meter 周围背景可拖动。
    全是不可交互元素（纯 span），不拦截拖动；led pointer-events:none。 */
-.card-grab{
-  flex-shrink:0;height:34px;width:100%;position:relative;z-index:5;
-  display:flex;align-items:center;padding:0 10px;cursor:grab;
-}
+/* .card-grab 布局已迁移到 Tailwind utility（HTML 内），此处仅保留 hover 态与子元素样式 */
 .card-grab:hover{background:radial-gradient(circle at center,color-mix(in srgb,var(--accent) 18%,transparent) 0 1px,transparent 2px) center/4px 4px repeat}
 /* 状态灯：绝对定位左侧（不占居中组空间） */
 .grab-led{
@@ -478,7 +475,8 @@ body.fit.admin-open .card,body.fit.admin-open .card[data-kind="idle"]{flex:1;min
 .card>.menu-scrim{position:absolute;z-index:5}
 .card>.menu-pop{position:absolute;z-index:6}
 .card>.project-pop{position:absolute;z-index:7}
-.card>.sheet{z-index:3}
+/* sheet（admin/设置面板）是模态覆盖，需盖住 header(card-grab z5)，否则关闭按钮被 header 拦截 */
+.card>.sheet{z-index:6}
 .card[data-kind="plan"]{--accent:var(--violet)}
 .card[data-kind="work"]{--accent:var(--amber)}
 .card[data-kind="wrap"]{--accent:var(--wrap)}

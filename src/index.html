@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="styles.css" />
 <link rel="stylesheet" href="layout-variants.css" />
 <link rel="stylesheet" href="theme-variants.css" />
+<!-- Tailwind utilities：作为补充层置于手写 CSS 之后，utility class 可覆盖基础样式 -->
+<link rel="stylesheet" href="tailwind.css" />
 <script src="vendor/gsap.min.js" defer></script>
 <script src="vendor/marked.min.js" defer></script>
 <script src="focus-policy.js" defer></script>
@@ -86,7 +88,7 @@
       <!-- 顶部 header：蝴蝶灯 + 项目名纯文本 + 空白拖动区 + 进度条。
            整体 data-tauri-drag-region：led/项目名/进度条周围背景可拖动；
            项目名是纯 span，不拦截拖动；蝴蝶灯 pointer-events:none 穿透。 -->
-      <div class="card-grab" data-tauri-drag-region title="拖动移动窗口">
+      <div class="card-grab flex shrink-0 h-[34px] w-full relative z-[5] items-center px-2.5 cursor-grab" data-tauri-drag-region title="拖动移动窗口">
         <span class="grab-led" id="grabLed" aria-hidden="true" data-state="idle"></span>
         <span class="grab-center">
           <span class="grab-project" id="grabProjectName" title="当前项目">全部项目</span>
