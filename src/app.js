@@ -1950,12 +1950,14 @@ if (typeof marked !== 'undefined') {
     },
   });
 }
-function mdRender(src) {
+function mdRender(src, foldH2 = true) {
   const source = String(src || '');
   if (!window.marked) return escHtml(source); // vendor 未加载时的安全兜底
   const html = marked.parse(source);
   /* 按 <h2> 切分重组进折叠分区（替代原 parser 内嵌状态机）：
-     h2 及后续内容进 <details class="doc-section">；h2 之前的头部内容原样保留。 */
+     h2 及后续内容进 <details class="doc-section">；h2 之前的头部内容原样保留。
+     foldH2=false：连续渲染（短预览用，如规范卡片），不切折叠分区。 */
+  if (!foldH2) return html;
   const h2Re = /<h2[^>]*>[\s\S]*?<\/h2>/g;
   const matches = html.match(h2Re) || [];
   if (!matches.length) return html;
@@ -2353,7 +2355,7 @@ function renderRelations(focused) {
             ${refCount.get(s.path) ? `<span class="rel-spec-refs">${refCount.get(s.path)} 任务用</span>` : ''}
           </span>
         </summary>
-        <div class="rel-spec-body">${s.content ? mdRender(s.content) : '<span class="dim">（空）</span>'}</div>
+        <div class="rel-spec-body doc">${s.content ? mdRender(s.content, false) : '<span class="dim">（空）</span>'}</div>
       </details>`;
       const allSpecs = [...specMap.values()];
       const filledSpecs = allSpecs.filter(s => s.filled);

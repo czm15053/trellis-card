@@ -1115,9 +1115,9 @@ body.rel-canvas .rel-graph{
 }
 
 /* 项目规范地图：trellis-update-spec 沉淀的团队规范（可展开正文） */
-.rel-spec-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;padding:8px}
+.rel-spec-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:8px}
 .rel-spec-item{
-  border:1px solid var(--line2);border-radius:8px;
+  border:1px solid color-mix(in srgb,var(--line2) 55%,transparent);border-radius:8px;
   background:color-mix(in srgb,var(--chalk) 1.5%,transparent);
 }
 .rel-spec-item.filled{border-left:3px solid var(--mint)}
@@ -1141,6 +1141,13 @@ body.rel-canvas .rel-graph{
   padding:8px 10px;border-top:1px solid var(--line2);
   font-size:10.5px;line-height:1.5;color:var(--chalk);
   max-height:280px;overflow:auto;
+}
+/* rel-spec-body 复用 .doc 的 markdown 排版，但保留卡片体的布局属性 */
+.rel-spec-body.doc{
+  flex:none;min-height:0;overflow:auto;
+  padding:8px 10px;padding-right:10px;
+  font-family:var(--font);font-size:10.5px;line-height:1.5;color:var(--chalk);
+  scrollbar-width:thin;scrollbar-color:var(--line2) transparent;
 }
 .rel-spec-sub-label{
   font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.12em;
