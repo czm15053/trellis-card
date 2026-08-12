@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="styles.css" />
 <link rel="stylesheet" href="layout-variants.css" />
 <link rel="stylesheet" href="theme-variants.css" />
+<!-- Tailwind utilities：作为补充层置于手写 CSS 之后，utility class 可覆盖基础样式 -->
+<link rel="stylesheet" href="tailwind.css" />
 <script src="vendor/gsap.min.js" defer></script>
 <script src="vendor/marked.min.js" defer></script>
 <script src="focus-policy.js" defer></script>
@@ -42,14 +44,16 @@
 
   <!-- 主界面 -->
   <div class="main-view" id="mainView" hidden>
-    <!-- 胶囊：固定 360×136 分区面板（拖动 / 内容回卡片 / 菜单 分离） -->
-    <div class="capsule" id="capsule" hidden data-kind="idle">
+    <!-- 胶囊：透明窗口中的灵动岛表面（拖动 / 内容回卡片 / 菜单分离） -->
+    <div class="capsule" id="capsule" hidden data-kind="idle" role="group" aria-label="Trellis Card 灵动岛">
+      <div class="cap-glow" aria-hidden="true"></div>
       <div class="cap-top">
         <div class="cap-drag" data-tauri-drag-region title="拖动移动窗口"></div>
         <button type="button" class="cap-menu-btn" id="btnCapMenu" title="胶囊菜单" aria-label="打开胶囊菜单" aria-expanded="false" aria-controls="capMenuPop"><svg class="lucide" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-more-horizontal"/></svg></button>
       </div>
-      <div class="cap-body" id="capBody" title="点击回到卡片">
+      <div class="cap-body" id="capBody" role="button" tabindex="0" aria-label="打开完整任务卡片" title="点击回到卡片">
         <div class="cap-title" id="capTitle">—</div>
+        <span class="cap-toolbadge" id="capToolBadge" hidden></span>
         <div class="cap-activity" id="capActivity">—</div>
         <div class="cap-status">
           <span class="orb" id="capOrb"></span>
@@ -72,18 +76,26 @@
         </div>
       </div>
       <div class="cap-menu-pop" id="capMenuPop" hidden>
-        <button type="button" class="cap-tool" id="btnCapToCard">回到卡片</button>
         <button type="button" class="cap-tool" id="btnCapLock" aria-pressed="false">锁定当前任务</button>
         <button type="button" class="cap-tool setting" id="btnCapAutoFollow" role="switch" aria-checked="true"><span>自动跟随</span><i aria-hidden="true">开</i></button>
         <button type="button" class="cap-tool setting" id="btnCapTop" role="switch" aria-checked="false"><span>窗口置顶</span><i aria-hidden="true">关</i></button>
+        <button type="button" class="cap-tool" id="btnCapSnap">吸附顶部</button>
         <button type="button" class="cap-tool danger" id="btnCapHide">隐藏</button>
       </div>
     </div>
 
     <article class="card" id="card" data-kind="idle">
-      <div class="dragbar" data-tauri-drag-region title="拖动移动窗口"></div>
-
-      <!-- 顶栏：Project chip · List · Menu · Detail（避开拖动区中心） -->
+      <!-- 顶部 header：蝴蝶灯 + 项目名纯文本 + 空白拖动区 + 进度条。
+           整体 data-tauri-drag-region：led/项目名/进度条周围背景可拖动；
+           项目名是纯 span，不拦截拖动；蝴蝶灯 pointer-events:none 穿透。 -->
+      <div class="card-grab flex shrink-0 h-[34px] w-full relative z-[5] items-center px-2.5 cursor-grab" data-tauri-drag-region title="拖动移动窗口">
+        <span class="grab-led" id="grabLed" aria-hidden="true" data-state="idle"></span>
+        <span class="grab-center">
+          <span class="grab-project" id="grabProjectName" title="当前项目">全部项目</span>
+        </span>
+        <span class="grab-meter" id="grabMeter" title="任务进度"><span class="ticks"><i></i><i></i><i></i><i></i></span><span class="score">—</span></span>
+      </div>
+      <!-- 顶栏：项目筛选 · List · Menu · Detail -->
       <div class="card-topbar" id="cardTopbar">
         <button type="button" class="proj-chip" id="btnProjectChip" aria-expanded="false" aria-controls="projectPop" title="筛选项目">
           <span class="proj-chip-label" id="projectChipLabel">全部项目</span>
@@ -91,6 +103,7 @@
         </button>
         <div class="topbar-actions">
           <button type="button" class="iconbtn" id="btnTree" title="任务列表（L）" aria-label="打开任务列表" aria-expanded="false" aria-controls="list"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-list"/></svg><span>列表</span></button>
+          <button type="button" class="iconbtn" id="btnRelations" title="任务关联" aria-label="打开任务关联" aria-expanded="false" aria-controls="relations"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-share-2"/></svg><span>关联</span></button>
           <button type="button" class="iconbtn menubtn" id="btnMenu" title="观察菜单" aria-label="打开观察菜单" aria-expanded="false" aria-controls="menuPop"><svg class="lucide" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-menu"/></svg></button>
           <button type="button" class="iconbtn flipbtn" id="btnFlip" title="详情" aria-label="打开任务详情"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-book-open"/></svg><span>详情</span></button>
         </div>
@@ -173,6 +186,19 @@
         </div>
         <div class="sheet-filters stars" id="treeStars" aria-label="项目筛选"></div>
         <ul class="tree" id="tree"></ul>
+      </div>
+
+      <!-- 任务关联 sheet（共享 spec 聚类 + 属性泳道 + 父子标记） -->
+      <div class="sheet list" id="relations" aria-hidden="true">
+        <div class="list-h" data-tauri-drag-region title="拖动移动窗口">
+          <span>任务关联</span>
+          <span class="sheet-h-right">
+            <span id="relationsCount">0</span>
+            <button type="button" class="mini sheet-close" id="btnRelationsClose" title="关闭">收起</button>
+          </span>
+        </div>
+        <div class="relations-lanes" id="relationsLanes" aria-label="泳道过滤"></div>
+        <div class="relations-body" id="relationsBody"></div>
       </div>
 
       <!-- 设置 sheet（配置；原项目管理） -->

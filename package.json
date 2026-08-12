@@ -1,7 +1,7 @@
 {
   "name": "trellis-card",
   "private": true,
-  "version": "0.1.6",
+  "version": "0.2.0",
   "description": "Read-only desktop observer for Trellis tasks and Agent activity",
   "scripts": {
     "tauri": "tauri",
@@ -11,6 +11,7 @@
     "check": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "^2",
+    "tailwindcss": "^3.4.17"
   }
 }

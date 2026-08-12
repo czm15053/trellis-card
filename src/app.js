@@ -96,9 +96,16 @@ const state = {
   theme: isThemeId(document.body.dataset.theme) ? document.body.dataset.theme : 'specimen',
   showArchived: false,    // 是否显示已归档任务（用于树列表过滤）
   winHeights: { card: null, back: null, admin: null }, // 各视图缓存窗口高度（切视图秒切，不重测量）
+  relOpen: false,         // 任务关联 sheet 是否展开
+  relationsByProject: {}, // projectName -> list_relations 结果 { tasks, specGroups, prdGroups }
+  relLane: 'all',         // 泳道过滤：all | frontend | backend | test | docs
+  relCenterKey: null,     // 关联图中心任务 key（null = 跟随当前聚焦；点任务卡切换）
+  specsByProject: {},     // projectName -> list_specs 结果（项目规范地图）
+  relView: 'tasks',       // 关联视图模式：'tasks' 任务看板 | 'links' 关联网络 | 'specs' 项目规范
 };
 let indexedTasks = [];    // 树列表当前可见扁平顺序（数字键 1-9 用，收起子项不计入）
 let treeCollapsed = new Set();  // 已收起父节点的稳定 key（'项目::任务id'），跨渲染保留
+let relCollapsed = new Set();   // 关联看板大任务组的折叠 key（跨渲染保留）
 let lastFocusKey = null;  // 上次渲染的聚焦（切换动画用）
 let entered = false;      // 卡片是否已完成首次进入动画
 
@@ -275,6 +282,8 @@ function loadPrefs() {
     if (typeof p.focusKey === 'string') state.focusKey = p.focusKey;
     if (typeof p.filter === 'string') state.filter = p.filter;
     if (typeof p.treeOpen === 'boolean') state.treeOpen = p.treeOpen;
+    if (typeof p.relOpen === 'boolean') state.relOpen = p.relOpen;
+    if (typeof p.relLane === 'string') state.relLane = p.relLane;
     if (typeof p.alwaysOnTop === 'boolean') state.alwaysOnTop = p.alwaysOnTop;
     /* 缺失或损坏时回退到 true，不影响现有用户 */
     if (typeof p.autoFollowImportant === 'boolean') state.autoFollowImportant = p.autoFollowImportant;
@@ -296,7 +305,8 @@ function savePrefs() {
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify({
       focusKey: state.focusKey, filter: state.filter,
-      treeOpen: state.treeOpen, alwaysOnTop: state.alwaysOnTop,
+      treeOpen: state.treeOpen, relOpen: state.relOpen, relLane: state.relLane,
+      alwaysOnTop: state.alwaysOnTop,
       autoFollowImportant: state.autoFollowImportant, theme: state.theme,
       showArchived: state.showArchived,
       winHeights: state.winHeights,
@@ -880,9 +890,26 @@ async function refresh(force = false, includeRuntime = true) {
         archivedTasks: (old && old.archivedTasks) || [],
       };
     }
+    /* 关联视图数据：与任务扫描同步拉取（独立命令，独立 version 语义），
+       失败不阻断主流程（关联视图降级为空）。 */
+    try {
+      const rel = await call('list_relations', { project: p.path });
+      state.relationsByProject[p.name] = rel || { tasks: [], specGroups: [] };
+    } catch (e) {
+      report('list_relations', e);
+      state.relationsByProject[p.name] = { tasks: [], specGroups: [] };
+    }
+    /* 项目规范地图：trellis-update-spec 沉淀的团队知识资产 */
+    try {
+      const specs = await call('list_specs', { project: p.path });
+      state.specsByProject[p.name] = specs || [];
+    } catch (e) {
+      report('list_specs', e);
+      state.specsByProject[p.name] = [];
+    }
   }
   for (const n of Object.keys(state.tasksByProject)) {
-    if (!seen.has(n)) { delete state.tasksByProject[n]; changed = true; }
+    if (!seen.has(n)) { delete state.tasksByProject[n]; delete state.relationsByProject[n]; changed = true; }
   }
   if (state.filter && !state.projects.some(p => p.name === state.filter)) state.filter = null;
   /* runtime 数据由后端事件（agent-state-changed / focus-task-changed）或 10s reconcile 推送。
@@ -1021,13 +1048,17 @@ function render() {
   const projectActivity = projectActivityFallback(t);
   renderCard(t, projectActivity);
   renderTree(t);
+  renderRelations(t);
   renderCapsule(t, projectActivity);
   renderAdmin();
   syncTools();
+  syncGrabHeader();
   savePrefs();
   /* sheet 无障碍语义：展开/收起同步 aria-hidden */
   const listSheet = $('list');
   if (listSheet) listSheet.setAttribute('aria-hidden', String(!state.treeOpen));
+  const relSheet = $('relations');
+  if (relSheet) relSheet.setAttribute('aria-hidden', String(!state.relOpen));
   const adminSheet = $('admin');
   if (adminSheet) adminSheet.setAttribute('aria-hidden', String(!state.adminOpen));
 }
@@ -1091,8 +1122,20 @@ function renderStars() {
   fillFilterStars($('projectPop'));
   const chipLabel = $('projectChipLabel');
   if (chipLabel) chipLabel.textContent = state.filter ? state.filter : '全部项目';
+  const grabName = $('grabProjectName');
+  if (grabName) grabName.textContent = state.filter ? state.filter : '全部项目';
   const chip = $('btnProjectChip');
   if (chip) chip.classList.toggle('on', !!state.filter || isProjectPopOpen());
+}
+/* header 状态同步：蝴蝶灯取 card.runtimeState；meter（ticks+score）由 renderCard/renderProjectActivityCard 填充 */
+function syncGrabHeader() {
+  const card = $('card');
+  const led = $('grabLed');
+  if (led && card) {
+    const st = card.dataset.runtimeState || 'idle';
+    led.dataset.state = st;
+    led.title = DISPLAY_COPY[st] || st || '空闲';
+  }
 }
 function isProjectPopOpen() {
   const pop = $('projectPop');
@@ -1348,11 +1391,7 @@ function renderProjectActivityCard(activity) {
   const rtLike = { agent: { startedAt: null, updatedAt: activity.updatedAt || 0 }, lastChangedAt: activity.updatedAt || 0 };
   main.innerHTML = `
     <div class="pane">
-      <div class="head observe-head">
-        <span class="obs-mark" aria-hidden="true"></span>
-        <span class="repo">${esc(project)}</span>
-        <span class="meter"><span class="ticks"><i class="c"></i></span><span class="score">AI</span></span>
-      </div>
+      ${'' /* .head observe-head 已平移到 header，避免重复显示 */}
       <h2 class="title">${esc(agent)} 项目会话</h2>
       ${observeTimelineFor(rtLike, null)}
       <div class="runtime-hero state-${esc(displayState.replaceAll('_', '-'))}">
@@ -1378,6 +1417,9 @@ function renderProjectActivityCard(activity) {
       </div></div>
       <div class="foot"><span class="fid">${esc(activity.sessionId || 'session')}</span><span id="runtime-updated" class="when">更新于 ${esc(relTime(updatedAt)) || '—'}</span></div>
     </div>`;
+  /* 项目级会话：header meter 显示 AI（无 lane 进度） */
+  const grabMeter = $('grabMeter');
+  if (grabMeter) grabMeter.innerHTML = `<span class="ticks"><i class="c"></i></span><span class="score">AI</span>`;
 }
 
 function renderCard(t, projectActivity) {
@@ -1443,11 +1485,6 @@ function renderCard(t, projectActivity) {
     const updatedAt = rt.lastChangedAt ? rt.lastChangedAt * 1000 : t.mtime;
     main.innerHTML = `
       <div class="pane">
-        <div class="head observe-head">
-          <span class="obs-mark" aria-hidden="true"></span>
-          <span class="repo">${esc(t.project)}</span>
-          <span class="meter"><span class="ticks">${ticks}</span><span class="score">${n}<em>/4</em></span></span>
-        </div>
         <h2 class="title">${esc(t.title || t.id)}</h2>
         ${observeTimelineFor(rt, t)}
         <div class="runtime-hero state-${esc(displayState.replaceAll('_', '-'))}">
@@ -1475,6 +1512,9 @@ function renderCard(t, projectActivity) {
           <span id="runtime-updated" class="when">更新于 ${esc(relTime(updatedAt)) || '—'}</span>
         </div>
       </div>`;
+    /* header meter：ticks 刻度 + score 百分比（原 .head observe-head 内容平移到 header） */
+    const grabMeter = $('grabMeter');
+    if (grabMeter) grabMeter.innerHTML = `<span class="ticks">${ticks}</span><span class="score">${n}<em>/4</em></span>`;
     /* 子任务 bar：点击展开/收起清单（直接切 class 保住过渡动画） */
     const box = $('subsBox');
     if (box) {
@@ -1539,7 +1579,12 @@ function syncFit() {
   /* fit 模式下 world 高度为 auto，让窗口跟随内容高度。
      设置面板（adminOpen）也参与自适应：内容高于当前窗口时拉伸窗口，
      而不是在固定窗口内内部滚动。翻面 / 任务树仍保持固定窗口几何。 */
-  const fit = state.mode === 'card' && !state.flipped && !state.treeOpen;
+  /* relOpen 参与 fit：让 body/world 高度跟随内容（world=auto），避免 body 固定在
+     viewport 高度导致 world 下方留大片透明空白；窗口实际高度由 scheduleWindowFit
+     的 relOpen 分支单独算（内容高度）。与 adminOpen 的 fit 处理一致。 */
+  /* rel-canvas（关联大画布）：world 保持窗口满高（不 fit），sheet 用 CSS 铺满；
+     relOpen 非画布模式才参与 fit（world 跟随内容）。 */
+  const fit = state.mode === 'card' && !state.flipped && !state.treeOpen && !document.body.classList.contains('rel-canvas');
   document.body.classList.toggle('fit', fit);
   /* fit 退出时清掉上一次写入的显式舞台高度，避免任务树 / 详情页继承正面卡片尺寸。 */
   if (!fit) {
@@ -1612,6 +1657,27 @@ function scheduleWindowFit() {
       const panelHeight = Math.max(admin.getBoundingClientRect().height, headerHeight + body.scrollHeight);
       h = Math.min(
         Math.max(IDLE_WINDOW_HEIGHT, Math.ceil(panelHeight) + 4),
+        Math.floor(screen.availHeight * 0.92),
+      );
+    } else if (state.relOpen) {
+      /* 关联大画布：窗口已放大，world 保持窗口满高，不在此处对齐内容。 */
+      if (document.body.classList.contains('rel-canvas')) {
+        world.style.height = '';
+        world.style.maxHeight = '';
+        return;
+      }
+      /* 关联视图：sheet 是绝对定位浮层（bottom:0），高度限制在窗口内（CSS max-height），
+         body 内部滚动。窗口只需对齐到「sheet 高度 + 上方区域」，无需让 sheet 无限高。 */
+      const rel = $('relations');
+      const body = $('relationsBody');
+      if (!rel || !body) { world.style.maxHeight = ''; return; }
+      /* 不设 inline max-height：sheet 用 CSS max-height（窗口内），body 内部滚动 */
+      const sheetTop = rel.getBoundingClientRect().top;
+      const cardTop = card.getBoundingClientRect().top;
+      const aboveSheet = Math.max(0, sheetTop - cardTop);
+      const sheetH = rel.getBoundingClientRect().height;
+      h = Math.min(
+        Math.max(IDLE_WINDOW_HEIGHT, Math.ceil(aboveSheet + sheetH) + 8),
         Math.floor(screen.availHeight * 0.92),
       );
     } else {
@@ -1738,6 +1804,7 @@ function openUnreadActivity() {
     state.prdCache = null;
     state.docSel = null;
     state.treeOpen = false;
+    state.relOpen = false;
     state.adminOpen = false;
     acknowledgeUnreadEvidence(evidence.entry);
   } else {
@@ -1893,12 +1960,14 @@ if (typeof marked !== 'undefined') {
     },
   });
 }
-function mdRender(src) {
+function mdRender(src, foldH2 = true) {
   const source = String(src || '');
   if (!window.marked) return escHtml(source); // vendor 未加载时的安全兜底
   const html = marked.parse(source);
   /* 按 <h2> 切分重组进折叠分区（替代原 parser 内嵌状态机）：
-     h2 及后续内容进 <details class="doc-section">；h2 之前的头部内容原样保留。 */
+     h2 及后续内容进 <details class="doc-section">；h2 之前的头部内容原样保留。
+     foldH2=false：连续渲染（短预览用，如规范卡片），不切折叠分区。 */
+  if (!foldH2) return html;
   const h2Re = /<h2[^>]*>[\s\S]*?<\/h2>/g;
   const matches = html.match(h2Re) || [];
   if (!matches.length) return html;
@@ -2124,6 +2193,498 @@ function collectAncestors(task, byId) {
   }
   return chain;
 }
+
+/* ---------- 任务关联视图 ----------
+   融合三种任务关联：
+   - 共享 spec 聚类（specGroups：被 ≥2 活跃任务引用的 spec）
+   - 属性泳道过滤（dev_type）
+   - 父子树骨架（复用 buildTree 层级，节点带 dev 徽章 + spec chip） */
+function devTypeLabel(v) {
+  const map = { frontend: '前端', backend: '后端', fullstack: '全栈', test: '测试', docs: '文档' };
+  return map[v] || v;
+}
+const REL_LANES = [
+  { key: 'all', label: '全部' },
+  { key: 'frontend', label: '前端' },
+  { key: 'backend', label: '后端' },
+  { key: 'test', label: '测试' },
+  { key: 'docs', label: '文档' },
+];
+/* 泳道过滤：只保留 dev_type === lane 的任务（含子任务中匹配的） */
+function relLaneFiltered(relTasks) {
+  if (state.relLane === 'all') return relTasks;
+  return relTasks.filter(t => t.devType === state.relLane);
+}
+/* 共享 spec 颜色：同一 spec 固定一色，保证同族一致 */
+const REL_SPEC_COLORS = ['#8b7cf6', '#f0a35e', '#45c4a0', '#4aa3ff', '#f07178'];
+function specColorIndex(path) {
+  let h = 0;
+  for (const c of path) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return h % REL_SPEC_COLORS.length;
+}
+function renderRelations(focused) {
+  const sheet = $('relations');
+  if (!sheet) return;
+  sheet.classList.toggle('open', !!state.relOpen);
+  const lanes = $('relationsLanes');
+  const body = $('relationsBody');
+  if (!lanes || !body) return;
+
+  /* 顶部 tab：两行——第一行视图切换（任务/关联/规范），第二行项目 tab */
+  const REL_VIEWS = [
+    { key: 'tasks', label: '任务' },
+    { key: 'links', label: '关联' },
+    { key: 'specs', label: '规范' },
+  ];
+  const VIEW_HINT = {
+    tasks: '任务状态 · 进度 · 待办 · 活跃会话',
+    links: '任务间共享同一决策/分析文档 = 同族关联',
+    specs: '项目沉淀的通用规范（trellis-update-spec）',
+  };
+  lanes.innerHTML =
+    /* 第一行：目录（项目 tab，大号突出，放最上面） */
+    `<div class="lanes-row lanes-proj">` +
+    [null, ...state.projects.map(p => p.name)].map(name =>
+      `<button type="button" class="lane-chip proj-tab${state.filter === name ? ' on' : ''}" data-proj="${esc(name || '')}">${name ? esc(name) : '全部项目'}</button>`
+    ).join('') +
+    `</div>` +
+    /* 第二行：视图模块（小号 chip，放下面） */
+    `<div class="lanes-row lanes-view">` +
+    REL_VIEWS.map(v =>
+      `<button type="button" class="lane-chip view-tab${state.relView === v.key ? ' on' : ''}" data-view="${v.key}">${v.label}</button>`
+    ).join('') +
+    `</div><div class="lanes-hint">${esc(VIEW_HINT[state.relView] || '')}</div>`;
+  lanes.querySelectorAll('.lane-chip[data-view]').forEach(btn => {
+    btn.onclick = () => {
+      state.relView = btn.dataset.view;
+      render();
+    };
+  });
+  lanes.querySelectorAll('.lane-chip[data-proj]').forEach(btn => {
+    btn.onclick = () => {
+      state.filter = btn.dataset.proj || null;
+      render();
+    };
+  });
+
+  /* 收集所有项目的关联任务（含项目名标注），支持当前项目筛选 */
+  const names = state.filter ? [state.filter] : state.projects.map(p => p.name);
+  let allTasks = [];
+  const allSpecGroups = [];
+  for (const name of names) {
+    const rel = state.relationsByProject[name];
+    if (!rel) continue;
+    for (const t of rel.tasks || []) allTasks.push({ ...t, project: name });
+    for (const g of rel.specGroups || []) allSpecGroups.push({ ...g, project: name });
+  }
+  /* 泳道过滤（关联数据里 devType 是后端透出的原始值） */
+  const filtered = relLaneFiltered(allTasks);
+
+  /* ---------- 任务看板：批次分组 + 任务卡片 ----------
+     以「一眼看到所有任务的状态/进度/待办」为目标，不用连线图。
+     分组：父任务（有 children）= 批次组，子任务在组内；独立任务单列。 */
+  let html = '';
+  let relCount = filtered.length;   /* 顶部计数，按视图更新 */
+  const dirName = (t) => String(t.dir || t.id).split('/').pop();
+  const findTask = (dir, proj) => allTasks.find(t => t.project === proj && dirName(t) === dir);
+  /* 共享文件价值判定：决策文档 .workflow/、源码、任务文档是强关联；spec/docs 索引是弱信号 */
+  const isStrongSharedFile = (p) => {
+    const n = String(p || '').replace(/\\/g, '/');
+    if (n.includes('.workflow/')) return true;
+    if (n.includes('.trellis/tasks/')) return true;
+    if (/\.(java|ts|js|tsx|jsx|py|go|rs|kt|swift|c|cpp|h)$/.test(n)) return true;
+    return false;
+  };
+  const card = (t) => {
+    const subs = t.subtasks || [];
+    const doneN = subs.filter(s => s.status === 'completed' || s.status === 'done').length;
+    const statusColor = t.status === 'completed' || t.status === 'done' ? '#45c4a0'
+      : t.status === 'in_progress' ? '#f0a35e'
+      : t.status === 'blocked' || t.status === 'failed' ? '#f07178'
+      : t.status === 'planning' ? '#8b7cf6' : '#63656e';
+    const pct = Math.round((t.progress || 0) * 100);
+    const rt = state.runtimeByTask.get(keyOf(t));
+    const active = rt && rt.agent && rt.agent.state && rt.agent.state !== 'none' && rt.agent.state !== 'idle';
+    const editing = (rt && rt.agent && rt.agent.toolInput && rt.agent.toolInput.filePath) || '';
+    const editShort = editing ? editing.split('/').pop() : '';
+    const lastTs = (rt && rt.lastChangedAt) ? rt.lastChangedAt * 1000
+      : (t.mtime && t.mtime > 100_000_000_000 ? t.mtime : (t.mtime || 0) * 1000);
+    const relTimeStr = lastTs ? relTime(lastTs) || '' : '';
+    /* 优先级（P0/P1/P2）：P0/P1 高优先任务更突出 */
+    const pri = t.priority || '';
+    const priClass = pri === 'P0' ? 'pri-p0' : pri === 'P1' ? 'pri-p1' : '';
+    /* 规范使用数：任务引用了几个 spec（specRefs）——体现任务与团队规范的关系 */
+    const specUsed = (t.specRefs || []).length;
+    /* 会话协作：同一任务被多个 AI session 处理（after_finish 语义，跨会话协作） */
+    const sessCount = (t.sessions || []).length;
+    return `<button type="button" class="rel-board-card${t.archived ? ' archived' : ''}${active ? ' live' : ''}${priClass ? ' ' + priClass : ''}" data-key="${esc(keyOf(t))}" style="--bc:${statusColor}">
+      <span class="rel-board-title">${active ? '<span class="live-dot" title="有活跃会话"></span>' : ''}${esc((t.title || t.id).slice(0, 34))}</span>
+      <span class="rel-board-linkbtn" data-linkkey="${esc(keyOf(t))}" title="查看此任务的关联">关联</span>
+      <span class="rel-board-meta">
+        <span class="rel-board-status">${esc((t.phase && t.phase.label) || t.status || '')}</span>
+        ${pri ? `<span class="rel-board-pri ${priClass}">${esc(pri)}</span>` : ''}
+        ${state.projects.length > 1 && t.project ? `<span class="rel-board-proj">${esc(t.project)}</span>` : ''}
+        ${sessCount > 1 ? `<span class="rel-board-sess" title="${sessCount} 个 AI 会话处理过此任务">${sessCount} 会话</span>` : ''}
+        ${specUsed ? `<span class="rel-board-specs" title="引用 ${specUsed} 个规范">${specUsed} 规范</span>` : ''}
+        ${t.phase && t.phase.warn ? '<span class="rel-board-warn">需规范</span>' : ''}
+        ${editShort ? `<span class="rel-board-file" title="${esc(editing)}">编辑 ${esc(editShort)}</span>` : ''}
+        ${subs.length ? `<span class="rel-board-todo">待办 ${doneN}/${subs.length}</span>` : ''}
+        ${t.devType ? `<span class="rel-board-dev">${esc(devTypeLabel(t.devType))}</span>` : ''}
+        ${t.archived ? '<span class="rel-board-arch">已归档</span>' : ''}
+        ${relTimeStr ? `<span class="rel-board-time">${esc(relTimeStr)}</span>` : ''}
+        <span class="rel-board-pct">${pct}%</span>
+      </span>
+      <span class="rel-board-bar"><i style="width:${pct}%;background:${statusColor}"></i></span>
+    </button>`;
+  };
+
+  /* ---------- 视图：规范地图 ---------- */
+  if (state.relView === 'specs') {
+    const specNames = state.filter ? [state.filter] : state.projects.map(p => p.name);
+    const specMap = new Map();
+    for (const name of specNames) {
+      for (const s of (state.specsByProject[name] || [])) specMap.set(`${name}::${s.path}`, s);
+    }
+    relCount = specMap.size;
+    if (!specMap.size) {
+      html += `<div class="tree-empty">暂无项目规范</div>`;
+    } else {
+      /* 每个 spec 被多少任务引用（specRefs 交集），体现规范的实际使用 */
+      const refCount = new Map();
+      for (const t of allTasks) {
+        for (const r of (t.specRefs || [])) refCount.set(r, (refCount.get(r) || 0) + 1);
+      }
+      /* preview 默认展开：单一项目（expandPreview=true）展开 spec 文档，全部项目收起；
+         showProject=true 时卡片标明所属项目 */
+      const specCard = (s, expandPreview, showProject) => `<details class="rel-spec-item${s.filled ? ' filled' : ''}"${expandPreview && s.filled ? ' open' : ''}>
+        <summary>
+          <span class="rel-spec-name" title="${esc(s.path)}">${esc(s.name)}</span>
+          <span class="rel-spec-meta">
+            <span class="rel-spec-cat">${showProject && s.project ? `${esc(s.project)} · ` : ''}${esc(s.category)}</span>
+            <span class="rel-spec-status">${s.filled ? '✓ 已沉淀' : '○ 空模板'}</span>
+            <span class="rel-spec-lines">${s.lineCount} 行</span>
+            ${refCount.get(s.path) ? `<span class="rel-spec-refs">${refCount.get(s.path)} 任务用</span>` : ''}
+          </span>
+        </summary>
+        <div class="rel-spec-body doc">${s.content ? mdRender(s.content, false) : '<span class="dim">（空）</span>'}</div>
+      </details>`;
+      /* 渲染按 category 聚合的组（分类组默认全部展开），组内 spec 卡片 */
+      const renderCatGrid = (specs, expandPreview, showProject) => {
+        const filledSpecs = specs.filter(s => s.filled);
+        const emptySpecs = specs.filter(s => !s.filled);
+        return (filledSpecs.length ? `<div class="rel-spec-sub-label">已沉淀（${filledSpecs.length}）</div><div class="rel-spec-grid">${filledSpecs.map(s => specCard(s, expandPreview, showProject)).join('')}</div>` : '')
+          + (emptySpecs.length ? `<details class="rel-spec-empty-group"><summary>空模板（${emptySpecs.length}）· 待填充 ▸</summary><div class="rel-spec-grid">${emptySpecs.map(s => specCard(s, expandPreview, showProject)).join('')}</div></details>` : '');
+      };
+      /* 渲染一个 category 组：分类组默认展开，组内是 spec 网格 */
+      const renderCatGroup = (cat, specs, gridHtml) => {
+        const gkey = `__cat_${cat}__`;
+        const gcollapsed = relCollapsed.has(gkey);   /* 分类组默认展开 */
+        const filledCount = specs.filter(s => s.filled).length;
+        html += `<div class="rel-board-group">
+          <div class="rel-board-group-h rel-board-group-toggle" data-group="${esc(gkey)}" title="展开/收起">
+            <span class="rel-board-caret">${gcollapsed ? '▸' : '▾'}</span>
+            <span class="rel-board-group-dot" style="background:#4aa3ff"></span>
+            <span class="rel-board-group-name">${esc(cat)}</span>
+            <span class="rel-board-group-count">${filledCount} 已沉淀</span>
+          </div>
+          ${gcollapsed ? '' : gridHtml}
+        </div>`;
+      };
+      /* 聚合 spec，附上所属项目名（全部项目时在卡片上标明） */
+      const allSpecsWithProject = [];
+      for (const name of specNames) {
+        const pSpecs = state.specsByProject[name] || [];
+        for (const s of pSpecs) allSpecsWithProject.push({ ...s, project: name });
+      }
+      const byCat = new Map();   // cat -> [spec]
+      for (const s of allSpecsWithProject) {
+        const cat = s.category || '未分类';
+        if (!byCat.has(cat)) byCat.set(cat, []);
+        byCat.get(cat).push(s);
+      }
+      /* 单一项目：preview 默认展开；全部项目：preview 收起，卡片上标明项目 */
+      const expandPreview = !!state.filter;
+      const showProject = !state.filter;
+      for (const cat of [...byCat.keys()].sort()) {
+        const cs = byCat.get(cat);
+        renderCatGroup(cat, cs, renderCatGrid(cs, expandPreview, showProject));
+      }
+    }
+  }
+
+  /* ---------- 视图：关联网络 ---------- */
+  else if (state.relView === 'links') {
+    /* 中心任务详情：选中的任务 + 它的关联 */
+    const centerTask = state.relCenterKey && allTasks.find(t => keyOf(t) === state.relCenterKey);
+    if (centerTask) {
+      const cKey = keyOf(centerTask);
+      const centerRefs = new Set(centerTask.fileRefs || []);
+      const sharedTasks = allTasks.filter(t => {
+        if (keyOf(t) === cKey || t.project !== centerTask.project) return false;
+        return (t.fileRefs || []).some(r => centerRefs.has(r) && isStrongSharedFile(r));
+      });
+      const parent = centerTask.parent ? findTask(centerTask.parent, centerTask.project) : null;
+      const children = (centerTask.children || []).map(c => findTask(c, centerTask.project)).filter(Boolean);
+      const siblings = parent ? (parent.children || []).map(c => findTask(c, parent.project)).filter(t => t && keyOf(t) !== cKey) : [];
+      const batchTasks = [...(parent ? [parent] : []), ...siblings, ...children].filter(Boolean);
+      html += `<div class="rel-link-panel">
+        <div class="rel-link-h">
+          <span class="rel-link-title">「${esc((centerTask.title || centerTask.id).slice(0, 30))}」的关联</span>
+          <button type="button" class="rel-link-close" data-clear-center>×</button>
+        </div>
+        ${batchTasks.length ? `<div class="rel-link-row"><span class="rel-link-label">同批次</span>${batchTasks.map(t =>
+          `<button type="button" class="rel-link-chip" data-key="${esc(keyOf(t))}">${esc((t.title || t.id).slice(0, 18))}</button>`).join('')}</div>` : ''}
+        ${sharedTasks.length ? `<div class="rel-link-row"><span class="rel-link-label">共享文件</span>${sharedTasks.map(t =>
+          `<button type="button" class="rel-link-chip" data-key="${esc(keyOf(t))}">${esc((t.title || t.id).slice(0, 18))}</button>`).join('')}</div>` : ''}
+        ${!batchTasks.length && !sharedTasks.length ? '<div class="rel-link-row dim">该任务暂无关联</div>' : ''}
+      </div>`;
+    }
+    /* 关联视图只展示「共享文件」关联（父子已在任务视图展示，不重复）。
+       共享文件 = 多个任务引用同一决策/分析/文档，Map 按「项目::文件」聚合天然去重。 */
+    const sharedMap = new Map();
+    for (const t of filtered) {
+      for (const r of (t.fileRefs || [])) {
+        if (!isStrongSharedFile(r)) continue;
+        const key = `${t.project}::${r}`;
+        if (!sharedMap.has(key)) sharedMap.set(key, { ref: r, members: [] });
+        sharedMap.get(key).members.push(t);
+      }
+    }
+    const sharedGroups = [...sharedMap.values()].filter(g => g.members.length >= 2);
+    /* 共享规范区：被 ≥2 任务引用的 spec（任务引用同一规范 = 共享规范知识） */
+    const specMap2 = new Map();
+    for (const t of filtered) {
+      for (const r of (t.specRefs || [])) {
+        if (!r) continue;
+        const key = `${t.project}::${r}`;
+        if (!specMap2.has(key)) specMap2.set(key, { ref: r, members: [] });
+        specMap2.get(key).members.push(t);
+      }
+    }
+    const sharedSpecGroups = [...specMap2.values()].filter(g => g.members.length >= 2);
+    /* 计数：共享关联涉及的去重任务数（文件 + 规范） */
+    const linkedTaskSet = new Set();
+    for (const g of sharedGroups) for (const m of g.members) linkedTaskSet.add(keyOf(m));
+    for (const g of sharedSpecGroups) for (const m of g.members) linkedTaskSet.add(keyOf(m));
+    relCount = linkedTaskSet.size;
+    if (!sharedGroups.length && !sharedSpecGroups.length) {
+      html += `<div class="tree-empty">暂无共享关联（任务间没有共同引用的决策/分析/规范）</div>`;
+    } else {
+      for (const g of sharedGroups) {
+        const col = REL_SPEC_COLORS[specColorIndex(g.ref)];
+        const refName = g.ref.split('/').pop();
+        /* 文件类型：决策/分析/设计/任务文档/其他，让组头更有信息量 */
+        const typeLabel = g.ref.includes('.workflow/.analysis/') ? '决策'
+          : g.ref.includes('.workflow/.team/') ? '分析'
+          : g.ref.includes('.trellis/tasks/') ? '任务文档'
+          : /\.(md)$/.test(refName) ? '文档'
+          : '文件';
+        html += `<div class="rel-board-group">
+          <div class="rel-board-group-h">
+            <span class="rel-board-group-dot" style="background:${col}"></span>
+            <span class="rel-board-group-name" title="${esc(g.ref)}">共享${typeLabel} · ${esc(refName)}</span>
+            <span class="rel-board-group-count">${g.members.length} 任务</span>
+          </div>
+          <div class="rel-board-cards">${g.members.map(card).join('')}</div>
+        </div>`;
+      }
+      /* 共享规范区（被 ≥2 任务引用的 spec）；组头支持点击预览 spec 的 md 文档 */
+      for (const g of sharedSpecGroups) {
+        const col = REL_SPEC_COLORS[specColorIndex(g.ref)];
+        const refName = g.ref.split('/').pop();
+        const spec = state.specsByProject[g.members[0].project]?.find(s => s.path === g.ref);
+        html += `<div class="rel-board-group" data-spec-preview-group="${esc(g.ref)}">
+          <div class="rel-board-group-h rel-board-group-toggle" data-group="${esc(g.ref)}" title="展开/收起">
+            <span class="rel-board-caret">${relCollapsed.has(g.ref) ? '▸' : '▾'}</span>
+            <span class="rel-board-group-dot" style="background:${col}"></span>
+            <span class="rel-board-group-name" title="${esc(g.ref)}">共享规范 · ${esc(refName)}</span>
+            <span class="rel-board-group-count">${g.members.length} 任务${spec ? ` · <button type="button" class="rel-spec-preview-btn" data-spec-preview="${esc(g.ref)}" data-project="${esc(g.members[0].project)}" title="预览规范 md 文档">预览 ▾</button>` : ''}</span>
+          </div>
+          <div class="rel-spec-preview-body" hidden></div>
+          ${relCollapsed.has(g.ref) ? '' : `<div class="rel-board-cards">${g.members.map(card).join('')}</div>`}
+        </div>`;
+      }
+    }
+  }
+
+  /* ---------- 视图：任务看板 ---------- */
+  else {
+    const batchParents = filtered.filter(t => (t.children || []).length > 0);
+    const childOf = new Map();
+    for (const bp of filtered) {
+      for (const c of (bp.children || [])) {
+        const child = findTask(c, bp.project);
+        if (child) childOf.set(keyOf(child), bp);
+      }
+    }
+    const batchGroups = batchParents.map(bp => ({ parent: bp, kids: (bp.children || []).map(c => findTask(c, bp.project)).filter(Boolean) }));
+    const inBatch = new Set([...childOf.keys()]);
+    const orphans = filtered.filter(t => !inBatch.has(keyOf(t)) && (t.children || []).length === 0);
+    if (!filtered.length) {
+      html += `<div class="tree-empty">暂无任务</div>`;
+    } else {
+      const liveTasks = filtered.filter(t => {
+        const rt = state.runtimeByTask.get(keyOf(t));
+        return rt && rt.agent && rt.agent.state && rt.agent.state !== 'none' && rt.agent.state !== 'idle';
+      });
+      if (liveTasks.length) {
+        html += `<div class="rel-board-group">
+          <div class="rel-board-group-h">
+            <span class="rel-board-group-dot" style="background:#45c4a0"></span>
+            <span class="rel-board-group-name">活跃任务</span>
+            <span class="rel-board-group-count">${liveTasks.length} 正在处理</span>
+          </div>
+          <div class="rel-board-cards">${liveTasks.map(card).join('')}</div>
+        </div>`;
+      }
+      for (const g of batchGroups) {
+        const gKey = keyOf(g.parent);
+        const collapsed = relCollapsed.has(gKey);
+        const pct = Math.round((g.parent.progress || 0) * 100);
+        html += `<div class="rel-board-group">
+          <div class="rel-board-group-h rel-board-group-toggle" data-group="${esc(gKey)}" title="展开/收起">
+            <span class="rel-board-caret">${collapsed ? '▸' : '▾'}</span>
+            <span class="rel-board-group-dot" style="background:${g.parent.archived ? '#63656e' : '#f0a35e'}"></span>
+            <span class="rel-board-group-name" title="${esc(g.parent.title || g.parent.id)}">${esc((g.parent.title || g.parent.id).slice(0, 40))}</span>
+            <span class="rel-board-group-count">${g.kids.length} 子任务 · ${pct}%</span>
+          </div>
+          ${collapsed ? '' : `<div class="rel-board-cards">${g.kids.map(card).join('')}</div>`}
+        </div>`;
+      }
+      if (orphans.length) {
+        /* 独立任务按「最近活动时间」分桶：今天 / 三天内 / 七天内 / 一个月内 / 更早。
+           组内再按状态排序（活跃 > 进行中 > 待办 > 完成）。 */
+        const taskLastTs = (t) => {
+          const rt = state.runtimeByTask.get(keyOf(t));
+          if (rt && rt.lastChangedAt) return rt.lastChangedAt * 1000;
+          if (t.mtime && t.mtime > 100_000_000_000) return t.mtime;
+          return (t.mtime || 0) * 1000;
+        };
+        const stateRank = (t) => {
+          const rt = state.runtimeByTask.get(keyOf(t));
+          if (rt && rt.agent && rt.agent.state && rt.agent.state !== 'none' && rt.agent.state !== 'idle') return 0;
+          if (t.status === 'in_progress') return 1;
+          if (t.status === 'blocked' || t.status === 'failed') return 2;
+          if (t.status === 'planning' || t.status === 'review') return 3;
+          if (t.status === 'completed' || t.status === 'done') return 4;
+          return 5;
+        };
+        const now = Date.now();
+        const DAY = 24 * 3600 * 1000;
+        const buckets = [
+          { key: 'today', label: '今天', max: DAY, color: '#45c4a0' },
+          { key: '3d', label: '三天内', max: 3 * DAY, color: '#8b7cf6' },
+          { key: '7d', label: '七天内', max: 7 * DAY, color: '#4aa3ff' },
+          { key: '30d', label: '一个月内', max: 30 * DAY, color: '#f0a35e' },
+          { key: 'older', label: '更早', max: Infinity, color: '#63656e' },
+        ];
+        const inBucket = (t, b) => {
+          const age = Math.max(0, now - taskLastTs(t));
+          const prevMax = buckets[buckets.findIndex(x => x.key === b.key) - 1];
+          const min = prevMax ? prevMax.max : 0;
+          return age >= min && age < b.max;
+        };
+        /* 独立任务是一级组，时间桶是组内二级 label */
+        html += `<div class="rel-board-group">
+          <div class="rel-board-group-h">
+            <span class="rel-board-group-dot" style="background:#8b7cf6"></span>
+            <span class="rel-board-group-name">独立任务</span>
+            <span class="rel-board-group-count">${orphans.length}</span>
+          </div>
+          <div class="rel-board-time-buckets">`;
+        for (const b of buckets) {
+          const items = orphans.filter(t => inBucket(t, b)).sort((x, y) => stateRank(x) - stateRank(y));
+          if (!items.length) continue;
+          html += `<div class="rel-board-time-bucket">
+            <div class="rel-board-time-label"><i style="background:${b.color}"></i>${b.label}<span class="rel-board-time-count">${items.length}</span></div>
+            <div class="rel-board-cards">${items.map(card).join('')}</div>
+          </div>`;
+        }
+        html += `</div></div>`;
+      }
+    }
+  }
+
+  body.innerHTML = html;
+  $('relationsCount').textContent = String(relCount);
+
+  /* 看板卡片点击：聚焦该任务（显示卡片） */
+  body.querySelectorAll('.rel-board-card').forEach(cardEl => {
+    cardEl.onclick = () => {
+      const key = cardEl.dataset.key;
+      const t = allTasks.find(x => keyOf(x) === key);
+      if (t) focusTask(t);   /* 点击卡片 → 跳转主卡片（关闭关联视图，显示对应任务） */
+    };
+  });
+  /* 卡片上的「关联」小按钮：查看此任务的关联（不跳转主卡片） */
+  body.querySelectorAll('.rel-board-linkbtn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const key = btn.dataset.linkkey;
+      const t = allTasks.find(x => keyOf(x) === key);
+      if (!t) return;
+      state.relCenterKey = key;
+      renderRelations(currentFocus());
+    };
+  });
+  /* 大任务组头点击：折叠/展开 */
+  body.querySelectorAll('.rel-board-group-toggle').forEach(hd => {
+    hd.onclick = () => {
+      const key = hd.dataset.group;
+      if (relCollapsed.has(key)) relCollapsed.delete(key);
+      else relCollapsed.add(key);
+      renderRelations(currentFocus());
+    };
+  });
+  /* 关联面板：chip 点击切换中心（串联浏览）、关闭清空 */
+  body.querySelectorAll('.rel-link-chip').forEach(chip => {
+    chip.onclick = () => {
+      state.relCenterKey = chip.dataset.key;
+      renderRelations(currentFocus());
+    };
+  });
+  body.querySelectorAll('.rel-link-close').forEach(btn => {
+    btn.onclick = () => {
+      state.relCenterKey = null;
+      renderRelations(currentFocus());
+    };
+  });
+  /* 共享规范预览：点击「预览」按钮加载 spec 的 md 文档渲染到组内 */
+  body.querySelectorAll('.rel-spec-preview-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const project = btn.dataset.project;
+      const ref = btn.dataset.specPreview;
+      const group = btn.closest('[data-spec-preview-group]');
+      if (!group) return;
+      const bodyEl = group.querySelector('.rel-spec-preview-body');
+      if (!bodyEl) return;
+      if (!bodyEl.hidden) { bodyEl.hidden = true; btn.textContent = '预览 ▾'; return; }
+      const specs = state.specsByProject[project] || [];
+      const spec = specs.find(s => ref === s.path || ref.endsWith(s.path) || s.path.endsWith(ref)) ||
+        specs.find(s => ref && s.path && ref.split('/').pop() === s.path.split('/').pop());
+      if (spec) {
+        bodyEl.innerHTML = `<div class="rel-spec-preview-doc doc">${mdRender(spec.content || '', false)}</div>`;
+      } else {
+        bodyEl.innerHTML = '<div class="rel-link-row dim">未找到该规范内容</div>';
+      }
+      bodyEl.hidden = false;
+      btn.textContent = '收起 ▴';
+    };
+  });
+  /* 关联网络节点：点设中心（查看详情），shift+点聚焦 */
+  body.querySelectorAll('.rel-link-node').forEach(node => {
+    node.onclick = (e) => {
+      const key = node.dataset.key;
+      const t = allTasks.find(x => keyOf(x) === key);
+      if (!t) return;
+      if (e.shiftKey) { focusTask(t); return; }
+      state.relCenterKey = key;
+      renderRelations(currentFocus());
+    };
+  });
+}
+
 function focusTask(t) {
   state.archiveReceipt = null;
   state.focusKey = keyOf(t);
@@ -2131,7 +2692,13 @@ function focusTask(t) {
   state.focusLockUntil = 0;
   clearRuntimeUnread();
   state.treeOpen = false;
+  state.relOpen = false;
   state.subOpen = null;
+  /* 若从关联画布聚焦：移除画布态并恢复窄窗，让卡片显示聚焦任务 */
+  if (document.body.classList.contains('rel-canvas')) {
+    document.body.classList.remove('rel-canvas');
+    if (hasTauri) call('set_window_size', { width: REL_NORMAL_W, height: REL_NORMAL_H }).catch(() => {});
+  }
   render();
 }
 /* 显式解除锁定：停止手动模式，回到策略决定焦点 */
@@ -2156,8 +2723,28 @@ function toggleAutoFollow() {
   render();
 }
 
-/* ---------- 胶囊：固定 360×136 三层信息 + 分区交互 ---------- */
+/* ---------- 胶囊：灵动岛紧凑态 + 展开态 ---------- */
 let lastCapRuntimeState = null;
+let lastCapsuleWindowExpanded = null;
+let capCapCollapseT = null;   /* pointerout 收起防抖定时器 */
+let capsuleWindowResizeChain = Promise.resolve();
+let modeTransitioning = false;
+function syncCapsuleWindow() {
+  if (!hasTauri || state.mode !== 'capsule' || modeTransitioning) return;
+  const cap = $('capsule');
+  const expanded = !!cap && (cap.classList.contains('is-expanded') || cap.classList.contains('menu-open'));
+  /* 舞台高度跟随展开态，避免 CSS 默认 40px 与窗口 136px 错位 */
+  const world = $('world');
+  if (world) world.style.height = expanded ? '136px' : '40px';
+  if (expanded === lastCapsuleWindowExpanded) return;
+  lastCapsuleWindowExpanded = expanded;
+  capsuleWindowResizeChain = capsuleWindowResizeChain
+    .then(() => call('set_capsule_expanded', { expanded }))
+    .catch((e) => {
+      lastCapsuleWindowExpanded = null;
+      report('set_capsule_expanded', e);
+    });
+}
 function capsuleKindFor(displayState, taskKind) {
   if (displayState === 'failed' || displayState === 'blocked') return 'halt';
   if (displayState === 'waiting_permission' || displayState === 'waiting_question') return 'wrap';
@@ -2174,6 +2761,9 @@ function renderCapsule(t, projectActivity) {
   cap.hidden = !show;
   cap.classList.toggle('show', show);
   if (!show) {
+    cap.classList.remove('is-expanded', 'menu-open');
+    lastCapsuleWindowExpanded = null;
+    if (capCapCollapseT) { clearTimeout(capCapCollapseT); capCapCollapseT = null; }
     const pop = $('capMenuPop');
     if (pop) pop.hidden = true;
     const btn = $('btnCapMenu');
@@ -2182,6 +2772,7 @@ function renderCapsule(t, projectActivity) {
   }
 
   let displayState = 'idle';
+  let rt = null;   /* 主任务 runtime view，供收缩态工具 badge 读取 */
   let title = '暂无活跃任务';
   let semanticActivity = '没有进行中的任务';
   let rawActivity = '';
@@ -2195,7 +2786,7 @@ function renderCapsule(t, projectActivity) {
   let progressTitle = '';
 
   if (t) {
-    const rt = runtimeViewForTask(t);
+    rt = runtimeViewForTask(t);
     const archiveReceipt = archiveReceiptFor(keyOf(t));
     displayState = rt.displayState || 'idle';
     kind = capsuleKindFor(displayState, t.kind);
@@ -2278,6 +2869,14 @@ function renderCapsule(t, projectActivity) {
   }
   $('capTitle').textContent = title;
   $('capTitle').title = title;
+  /* 收缩态实时显示当前工具：主任务用 rt.agent.toolName，项目级用 projectActivity.toolName */
+  const toolBadge = $('capToolBadge');
+  const toolName = (t && rt && rt.agent && rt.agent.toolName) || (projectActivity && projectActivity.toolName) || '';
+  if (toolBadge) {
+    toolBadge.textContent = toolName;
+    toolBadge.hidden = !toolName;
+    toolBadge.title = toolName ? `当前工具 · ${toolName}` : '';
+  }
   const capsuleActivity = rawActivity || semanticActivity;
   $('capActivity').textContent = capsuleActivity;
   /* 项目标识：始终展示当前所在项目，空闲态显示全部/未接入 */
@@ -2326,7 +2925,10 @@ function renderCapsule(t, projectActivity) {
   }
   if (previewTitle) previewTitle.textContent = title;
   if (previewActivity) previewActivity.textContent = capsuleActivity;
-  if (previewExcerptEl) previewExcerptEl.textContent = previewExcerpt || capsuleActivity;
+  if (previewExcerptEl) {
+    /* 展开态详情支持 markdown：excerpt/description 用 marked 解析渲染 */
+    previewExcerptEl.innerHTML = mdRender(previewExcerpt || capsuleActivity);
+  }
 
   /* 未读 badge：manual lock / 关闭自动跟随时的被拒实时活动 */
   const badge = $('capBadge');
@@ -2376,54 +2978,83 @@ function syncCapMenu() {
     if (mark) mark.textContent = state.alwaysOnTop ? '开' : '关';
   }
 }
-function toggleCapMenu(force) {
+async function toggleCapMenu(force) {
   const pop = $('capMenuPop');
   const btn = $('btnCapMenu');
   if (!pop || !btn) return;
   const target = force !== undefined ? force : pop.hidden;
-  pop.hidden = !target;
+  const cap = $('capsule');
+  /* 先加 menu-open 类：CSS 立即切到 136px 布局，窗口 resize 链随后跟上。
+     菜单 pop 要等窗口真正到 136px 后再显示，避免被 40px 紧凑窗口裁切。 */
+  if (cap) {
+    cap.classList.toggle('menu-open', target);
+    if (target && capCapCollapseT) { clearTimeout(capCapCollapseT); capCapCollapseT = null; }
+  }
+  syncCapsuleWindow();
   btn.classList.toggle('on', target);
   btn.setAttribute('aria-expanded', String(target));
   if (target) {
     /* 与主卡菜单一致：记录触发按钮，焦点进入第一个菜单项 */
     focusReturnTo = btn;
     syncCapMenu();
-    setTimeout(() => moveFocusInto(pop), 50);
+    /* 等展开窗口的 IPC 完成后再揭晓菜单（resize 链串行，天然防抖）。
+       await 期间可能被快速连点切到关闭态，需校验 menu-open 仍存在再显示。 */
+    try {
+      await capsuleWindowResizeChain;
+    } catch (e) {
+      /* resize 失败不阻塞菜单 */
+    }
+    if (cap && cap.classList.contains('menu-open')) {
+      pop.hidden = false;
+      setTimeout(() => moveFocusInto(pop), 50);
+    }
   } else {
+    pop.hidden = true;
     restoreFocus();
   }
 }
 async function openUnreadFromCapsule() {
   /* badge：回卡片查看证据，不改 focus/锁定。切换失败时保留未读。 */
-  if (state.mode === 'capsule') {
-    try {
-      await call('set_window_mode', { mode: 'card' });
-    } catch (e) {
-      report('set_window_mode', e);
-      return false;
-    }
-    state.mode = 'card';
-    render();
-  }
+  if (state.mode === 'capsule' && !(await setMode('card'))) return false;
   return openUnreadActivity();
 }
 async function setMode(mode) {
-  if (state.mode === mode) return;
+  if (state.mode === mode) return true;
+  if (modeTransitioning) return false;
+  modeTransitioning = true;
   try {
+    await capsuleWindowResizeChain;
     await call('set_window_mode', { mode });
     state.mode = mode;
+    lastCapsuleWindowExpanded = null;
     if (mode === 'capsule') {
       state.themeOpen = false;
       state.menuOpen = false;
+      state.treeOpen = false;
+      state.relOpen = false;
+      state.adminOpen = false;
       const mp = $('menuPop');
       if (mp) mp.hidden = true;
       toggleCapMenu(false);
+      /* 舞台高度归位：清掉 card 模式 fit 残留的内联高度，紧凑态 40px 由 CSS 兜底。
+         展开/收合时 syncCapsuleWindow 会再同步为 40/136。 */
+      const w = $('world');
+      if (w) { w.style.height = '40px'; w.style.maxHeight = ''; }
+      /* 后端 set_window_mode('capsule') 已直接设紧凑 40px；CSS 以 40px 紧凑渲染，
+         无需再主动收回。 */
+      await call('set_capsule_expanded', { expanded: false }).catch((e) => report('set_capsule_expanded', e));
     } else {
       toggleCapMenu(false);
+      const w = $('world');
+      if (w) { w.style.height = ''; w.style.maxHeight = ''; }
     }
     render();
+    return true;
   } catch (e) {
     report('set_window_mode', e);
+    return false;
+  } finally {
+    modeTransitioning = false;
   }
 }
 
@@ -2689,6 +3320,7 @@ function toggleTree() {
     if (state.menuOpen) toggleMenu(false);
     closeProjectPop();
     state.adminOpen = false;
+    state.relOpen = false;
     state.flipped = false;   /* 开 sheet 必回正面 */
     state.evidenceTarget = null;
     state.treeOpen = true;
@@ -2708,6 +3340,7 @@ function toggleAdmin() {
     if (state.menuOpen) toggleMenu(false);
     closeProjectPop();
     state.treeOpen = false;
+    state.relOpen = false;
     state.flipped = false;
     state.evidenceTarget = null;
     state.adminOpen = true;
@@ -2731,6 +3364,44 @@ function closeTree() {
 function closeAdmin() {
   if (!state.adminOpen) return;
   state.adminOpen = false;
+  render();
+  restoreFocus();
+}
+/* 关联画布大展开尺寸：突破 380×640 窄窗，接近全屏展示批次树 */
+const REL_CANVAS_W = 940;
+const REL_CANVAS_H = 900;
+const REL_NORMAL_W = 380;
+const REL_NORMAL_H = 640;
+function toggleRelations() {
+  const opening = !state.relOpen;
+  if (opening) {
+    if (state.themeOpen) toggleThemePop(false);
+    if (state.menuOpen) toggleMenu(false);
+    closeProjectPop();
+    state.treeOpen = false;
+    state.adminOpen = false;
+    state.flipped = false;
+    state.evidenceTarget = null;
+    state.relOpen = true;
+    focusReturnTo = $('btnRelations');
+    /* 关联画布：窗口临时放大展示批次树，关闭时恢复窄窗 */
+    if (hasTauri) call('set_window_size', { width: REL_CANVAS_W, height: REL_CANVAS_H }).catch(() => {});
+    document.body.classList.add('rel-canvas');
+    render();
+    setTimeout(() => moveFocusInto($('relations')), 50);
+  } else {
+    state.relOpen = false;
+    document.body.classList.remove('rel-canvas');
+    if (hasTauri) call('set_window_size', { width: REL_NORMAL_W, height: REL_NORMAL_H }).catch(() => {});
+    render();
+    restoreFocus();
+  }
+}
+function closeRelations() {
+  if (!state.relOpen) return;
+  state.relOpen = false;
+  document.body.classList.remove('rel-canvas');
+  if (hasTauri) call('set_window_size', { width: REL_NORMAL_W, height: REL_NORMAL_H }).catch(() => {});
   render();
   restoreFocus();
 }
@@ -2897,7 +3568,7 @@ async function onTasksChanged({ urgent = false, project = null } = {}) {
     }
     state.subOpen = null;
     toast(`新任务：${t.title || t.id}`);
-    if (state.mode === 'capsule') await setMode('card');   /* 胶囊模式自动弹回 */
+    /* 保持胶囊态：任务变化时不弹回卡片，胶囊收缩态实时更新工具/活动 */
   }
   /* 事件变更可能含外部 task.py archive（不经前端 archive_task）：归档缓存需失效重拉，
      否则显示归档时新归档任务停留在旧缓存。showArchived 开启时刷新受影响项目。 */
@@ -3141,12 +3812,14 @@ function bindUI() {
   $('btnStartEmpty').onclick = () => startWithoutProject();
   $('btnRefresh').onclick = () => { toggleMenu(false); manualRefresh(); };
   $('btnTree').onclick = () => { if (state.menuOpen) toggleMenu(false); toggleTree(); };
+  $('btnRelations').onclick = () => { if (state.menuOpen) toggleMenu(false); toggleRelations(); };
   $('btnCapsule').onclick = () => { toggleMenu(false); setMode('capsule'); };
   $('btnAutoFollow').onclick = () => { toggleAutoFollow(); syncMenuChrome(); };
   $('btnTop').onclick = () => { toggleTop().then(() => syncMenuChrome()); };
   $('btnAdmin').onclick = () => { toggleMenu(false); toggleAdmin(); };
   if ($('btnAdminClose')) $('btnAdminClose').onclick = () => closeAdmin();
   if ($('btnTreeClose')) $('btnTreeClose').onclick = () => closeTree();
+  if ($('btnRelationsClose')) $('btnRelationsClose').onclick = () => closeRelations();
   /* 「显示已归档」勾选框：切换后懒加载各项目归档任务，再重渲染任务树 */
   const chkArchived = $('chkShowArchived');
   if (chkArchived) {
@@ -3182,9 +3855,45 @@ function bindUI() {
   /* 胶囊分区交互：内容回卡片 / 菜单 / 未读 badge，拖动区无 click */
   const capBody = $('capBody');
   if (capBody) {
+    const cap = $('capsule');
+    if (cap) {
+      const expand = () => {
+        if (capCapCollapseT) { clearTimeout(capCapCollapseT); capCapCollapseT = null; }
+        cap.classList.add('is-expanded');
+        syncCapsuleWindow();
+      };
+      const collapseIfOutside = (e) => {
+        if (cap.classList.contains('menu-open')) return;   /* 菜单打开期间锁定展开态 */
+        if (e.relatedTarget && cap.contains(e.relatedTarget)) return;
+        /* 120ms 防抖：指针短暂扫过边缘不触发收起抖动（窗口 resize 抖动） */
+        if (capCapCollapseT) clearTimeout(capCapCollapseT);
+        capCapCollapseT = setTimeout(() => {
+          capCapCollapseT = null;
+          cap.classList.remove('is-expanded');
+          syncCapsuleWindow();
+        }, 120);
+      };
+      cap.addEventListener('pointerover', expand);
+      cap.addEventListener('pointerout', collapseIfOutside);
+      cap.addEventListener('focusin', expand);
+      cap.addEventListener('focusout', (e) => {
+        if (cap.classList.contains('menu-open')) return;   /* 菜单打开期间锁定展开态 */
+        requestAnimationFrame(() => {
+          if (!cap.contains(document.activeElement) && !(e.relatedTarget && cap.contains(e.relatedTarget))) {
+            cap.classList.remove('is-expanded');
+            syncCapsuleWindow();
+          }
+        });
+      });
+    }
     capBody.onclick = (e) => {
       if (e.target.closest('#capBadge, .cap-badge')) return;
       toggleCapMenu(false);
+      setMode('card');
+    };
+    capBody.onkeydown = (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
       setMode('card');
     };
   }
@@ -3205,8 +3914,6 @@ function bindUI() {
       toggleCapMenu();
     };
   }
-  const btnCapToCard = $('btnCapToCard');
-  if (btnCapToCard) btnCapToCard.onclick = (e) => { e.stopPropagation(); toggleCapMenu(false); setMode('card'); };
   const btnCapLock = $('btnCapLock');
   if (btnCapLock) {
     btnCapLock.onclick = (e) => {
@@ -3240,6 +3947,12 @@ function bindUI() {
       });
     };
   }
+  const btnCapSnap = $('btnCapSnap');
+  if (btnCapSnap) btnCapSnap.onclick = (e) => {
+    e.stopPropagation();
+    if (hasTauri) call('snap_window_top').catch((err) => report('snap_window_top', err));
+    toggleCapMenu(false);
+  };
   const btnCapHide = $('btnCapHide');
   if (btnCapHide) btnCapHide.onclick = (e) => { e.stopPropagation(); toggleCapMenu(false); hideWindow(); };
 
@@ -3304,6 +4017,7 @@ function bindUI() {
     if (k === 'Escape') {
       if (state.adminOpen) { closeAdmin(); }
       else if (state.treeOpen) { closeTree(); }
+      else if (state.relOpen) { closeRelations(); }
       else if (state.flipped) { toggleFlip(false); }
       return;
     }
@@ -3375,6 +4089,13 @@ async function boot() {
   /* 事件订阅在首屏 refresh 前注册：消除「首屏 render 完成 → 订阅就绪」之间的
      丢事件窗口期。bindWatch 只注册 listen，不依赖 refresh 结果或 main DOM。 */
   bindWatch();
+  /* 去除窗口外框兜底：tauri.conf 已设 decorations:false，这里动态再设一次，
+     确保任何平台（含 Windows）无边框 + 透明，交由前端 data-tauri-drag-region 拖动。 */
+  if (hasTauri && window.__TAURI__.window) {
+    try {
+      window.__TAURI__.window.getCurrentWindow().setDecorations(false);
+    } catch (e) { /* 已无边框时静默 */ }
+  }
   if (state.configured) {
     state.view = 'main';
     $('setup').hidden = true;
