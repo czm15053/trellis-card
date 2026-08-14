@@ -16,7 +16,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-export function findTrellisRoot(start) {
+function findTrellisRoot(start) {
   let cur = start || ''
   for (let i = 0; i < 16 && cur; i++) {
     try {
@@ -52,7 +52,7 @@ function blockText(block) {
 }
 
 /** Join all text blocks of a message content array into one line. */
-export function contentText(content) {
+function contentText(content) {
   if (!Array.isArray(content)) return ''
   const parts = content.map((b) => blockText(b)).filter((t) => t.length > 0)
   const joined = parts.join(' ')
