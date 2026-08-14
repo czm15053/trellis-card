@@ -1,0 +1,20 @@
+{
+  "name": "dsh-trellis-bridge",
+  "version": "0.1.0",
+  "description": "Trellis Card bridge plugin for DSH (DeepSeek Harness): pure observer that forwards dsh session/tool activity to Trellis Card over the same hook channel used by codex/claude/pi.",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": {
+      "default": "./src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "BSD-3-Clause"
+}

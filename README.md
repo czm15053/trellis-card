@@ -21,6 +21,7 @@ Trellis Card 是一款 macOS / Windows / Linux 桌面端小工具，以「卡片
 | **Cursor** | 应用侧写入 `~/.cursor/hooks.json` | 会话开始、工具活动（纯观察者） |
 | **Pi** | 用户级全局扩展 `~/.pi/agent/extensions/` | 会话开始、用户 prompt、工具活动（纯观察者） |
 | **OpenCode** | 用户级全局插件 `~/.config/opencode/plugins/` | 用户消息、工具活动（纯观察者） |
+| **DeepSeek Harness** | dsh 插件 `~/.config/trellis-card/agents/dsh-trellis-bridge/` | 会话开始、用户 prompt、工具活动（纯观察者） |
 
 ![Agent 接入设置](./docs/screenshots/agent-settings.png)
 
@@ -146,12 +147,12 @@ Hook 只需安装一次，即可观察多个项目。若已进入主界面，可
 
 1. 点击卡片右上角的三横线，打开「观察菜单」。
 2. 在「配置」区域点击「设置」。
-3. 在「Agent 接入」中选择 `Codex`、`Claude Code`、`Cursor`、`Pi` 或 `OpenCode`，点击「安装」。
+3. 在「Agent 接入」中选择 `Codex`、`Claude Code`、`Cursor`、`Pi`、`OpenCode` 或 `DeepSeek Harness`，点击「安装」。
 4. 重启对应 Agent；此后它在 Trellis 项目中的活动会自动出现在卡片中。
 
 「设置」会显示 Hook 是否已安装；需要停止接入时，点击同一位置的「移除」即可。应用只管理自身写入的 Hook，不会改动其他配置。
 
-> 说明：Cursor / Pi / OpenCode 的 hook 是纯观察者，只采集会话与工具活动，不参与权限决策，也不会阻断或修改命令。Pi 通过用户级全局扩展（`~/.pi/agent/extensions/`）、OpenCode 通过用户级全局插件（`~/.config/opencode/plugins/`）接入，均无需在项目内放置文件。
+> 说明：Cursor / Pi / OpenCode / DeepSeek Harness 的 hook 是纯观察者，只采集会话与工具活动，不参与权限决策，也不会阻断或修改命令。Pi 通过用户级全局扩展（`~/.pi/agent/extensions/`）、OpenCode 通过用户级全局插件（`~/.config/opencode/plugins/`）、DeepSeek Harness 通过 dsh 插件（`~/.config/trellis-card/agents/dsh-trellis-bridge/`）接入，均无需在项目内放置文件。DeepSeek Harness 的 bridge 需要先安装 dsh（`npm i -g @deepseek-ai/dsh`），安装后重启 DeepSeek Harness 生效。
 
 ## 操作速查
 

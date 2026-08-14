@@ -26,3 +26,6 @@ src-tauri/.omc/
 .claude/
 .cursor/
 AGENTS.md
+
+# DSH bridge 开发验证产物（probe/fixture/假二进制；正式模板在 src-tauri/templates/dsh/）
+dsh-bridge/

@@ -1,6 +1,7 @@
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use toml_edit::{value, Document};
 
 /* Claude Code / Codex 的 hook 事件（PascalCase，settings.json/hooks.json 嵌套结构）。 */
@@ -26,6 +27,21 @@ const PI_BRIDGE_TEMPLATE: &str = include_str!("../templates/pi_bridge.ts");
 const OPENCODE_PLUGINS_DIR: &str = ".config/opencode/plugins";
 const OPENCODE_PLUGIN_FILE: &str = "trellis-card.js";
 const OPENCODE_PLUGIN_TEMPLATE: &str = include_str!("../templates/opencode_plugin.js");
+
+/* DSH（DeepSeek Harness）不是「hook + JSON 配置」平台，而是 cordis 插件体系。
+Trellis Card 内置一个 dsh-trellis-bridge cordis 插件（多文件 npm 包），安装时
+复制到 ~/.config/trellis-card/agents/dsh-trellis-bridge/ 并用 `dsh plugin
+--profile web add link:<dir>` 挂载到 dsh web profile；卸载时 `dsh plugin
+--profile web remove` 并从 profile 移除。模板内嵌在 src-tauri/templates/dsh/。 */
+const DSH_PROFILE: &str = "web";
+const DSH_BRIDGE_PACKAGE: &str = "dsh-trellis-bridge";
+/* 目录名必须等于 npm 包名 dsh-trellis-bridge：`dsh plugin add link:<dir>` 用目录名
+当包名注册，目录名不符会导致 profile 里出现错误的包名。 */
+const DSH_AGENTS_DIR: &str = "agents/dsh-trellis-bridge";
+const DSH_INDEX_TEMPLATE: &str = include_str!("../templates/dsh/src/index.js");
+const DSH_LIB_TEMPLATE: &str = include_str!("../templates/dsh/src/lib.js");
+const DSH_PACKAGE_JSON_TEMPLATE: &str = include_str!("../templates/dsh/package.json");
+const DSH_PATCH_TEMPLATE: &str = include_str!("../templates/dsh/cordis.patch.yml");
 
 /* Cursor 的 hook 事件（camelCase 小写开头，hooks.json 扁平结构）。
 只采集核心事件集；Cursor 无 PermissionRequest/PostToolUse 等事件。 */
@@ -126,6 +142,129 @@ fn write_standalone_file(path: &Path, template: &str, uninstall: bool) -> Result
         write_atomic(path, template.as_bytes())?;
     }
     Ok(())
+}
+
+/* ---- DSH bridge（cordis 插件包）---- */
+
+/** Where the dsh-trellis-bridge plugin package lives on disk. */
+fn dsh_bridge_dir() -> PathBuf {
+    if let Ok(path) = std::env::var("TRELLIS_CARD_DSH_DIR") {
+        return PathBuf::from(path);
+    }
+    crate::config::app_config_dir().join(DSH_AGENTS_DIR)
+}
+
+/** Write the embedded dsh-trellis-bridge package to the target directory. */
+fn write_dsh_bridge(dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(dir.join("src")).map_err(|e| e.to_string())?;
+    fs::write(dir.join("package.json"), DSH_PACKAGE_JSON_TEMPLATE).map_err(|e| e.to_string())?;
+    fs::write(dir.join("cordis.patch.yml"), DSH_PATCH_TEMPLATE).map_err(|e| e.to_string())?;
+    fs::write(dir.join("src/index.js"), DSH_INDEX_TEMPLATE).map_err(|e| e.to_string())?;
+    fs::write(dir.join("src/lib.js"), DSH_LIB_TEMPLATE).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/** Locate the dsh executable across common install roots and $PATH.
+GUI 应用由 LaunchServices 启动，PATH 通常不含 /opt/homebrew/bin（Homebrew），
+而 dsh 装在那里——用绝对路径探测 + PATH 兜底，避免 Command::new("dsh") 找不到。 */
+fn dsh_bin() -> Option<PathBuf> {
+    let candidates = [
+        "/opt/homebrew/bin/dsh",
+        "/usr/local/bin/dsh",
+        "/usr/bin/dsh",
+        "$HOME/.local/bin/dsh",
+    ];
+    for raw in candidates {
+        let path = PathBuf::from(raw.replace("$HOME", &dirs::home_dir().unwrap_or_default().to_string_lossy()));
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in path.split(':') {
+            let candidate = PathBuf::from(dir).join("dsh");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/** Run `dsh plugin --profile <p> <args...>` and return stdout/stderr on failure. */
+fn dsh_plugin(args: &[&str]) -> Result<String, String> {
+    let bin = dsh_bin()
+        .ok_or_else(|| "无法定位 dsh CLI：请确认已安装 DeepSeek Harness（npm i -g @deepseek-ai/dsh）".to_string())?;
+    let output = Command::new(&bin)
+        .args(["plugin", "--profile", DSH_PROFILE])
+        .args(args)
+        .output()
+        .map_err(|e| format!("无法执行 dsh CLI：{e}（请确认已安装 DeepSeek Harness）"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        let err = String::from_utf8_lossy(&output.stderr).into_owned();
+        let out = String::from_utf8_lossy(&output.stdout).into_owned();
+        Err(format!("dsh plugin 失败：{err}{out}"))
+    }
+}
+
+/** Install the bridge package and mount it into the dsh web profile. */
+fn install_dsh_bridge() -> Result<PathBuf, String> {
+    let dir = dsh_bridge_dir();
+    write_dsh_bridge(&dir)?;
+    let link = format!("link:{}", dir.display());
+    dsh_plugin(&["add", &link])?;
+    Ok(dir)
+}
+
+/** Unmount the bridge from the dsh profile and remove the package directory. */
+fn uninstall_dsh_bridge() -> Result<(), String> {
+    let _ = dsh_plugin(&["remove", DSH_BRIDGE_PACKAGE]);
+    let dir = dsh_bridge_dir();
+    if dir.exists() {
+        fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/** The dsh profile manifest that lists bundles (test-overridable). */
+fn dsh_profile_manifest() -> PathBuf {
+    if let Ok(path) = std::env::var("TRELLIS_CARD_DSH_PROFILE_MANIFEST") {
+        return PathBuf::from(path);
+    }
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    home.join(".dsh")
+        .join("profiles")
+        .join(DSH_PROFILE)
+        .join("package.json")
+}
+
+/** True when the bridge package dir exists AND is listed in the profile bundles. */
+fn dsh_installed() -> bool {
+    if !dsh_bridge_dir().join("package.json").is_file() {
+        return false;
+    }
+    /* 解析 manifest 的 dsh.profile.bundles 数组，避免子串误判（用户在其他字段写同名）。 */
+    let text = match std::fs::read_to_string(dsh_profile_manifest()) {
+        Ok(text) => text,
+        Err(_) => return false,
+    };
+    let value: Value = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    value
+        .get("dsh")
+        .and_then(|dsh| dsh.get("profile"))
+        .and_then(|profile| profile.get("bundles"))
+        .and_then(Value::as_array)
+        .map(|bundles| {
+            bundles
+                .iter()
+                .any(|b| b.as_str() == Some(DSH_BRIDGE_PACKAGE))
+        })
+        .unwrap_or(false)
 }
 
 fn load_json(path: &Path) -> Result<(Value, bool), String> {
@@ -278,6 +417,9 @@ pub fn merge_hooks(config: &mut Value, command: &str, uninstall: bool) -> Result
 }
 
 fn config_path(agent: &str) -> PathBuf {
+    if agent == "dsh" {
+        return dsh_bridge_dir();
+    }
     let env_key = match agent {
         "claude" => "TRELLIS_CARD_CLAUDE_CONFIG",
         "codex" => "TRELLIS_CARD_CODEX_CONFIG",
@@ -328,8 +470,21 @@ fn hook_command(executable: &Path, agent: &str) -> String {
 }
 
 pub fn install_hooks(agent: &str, uninstall: bool) -> Result<PathBuf, String> {
-    if !matches!(agent, "claude" | "codex" | "cursor" | "pi" | "opencode") {
-        return Err("agent must be codex, claude, cursor, pi or opencode".into());
+    if !matches!(
+        agent,
+        "claude" | "codex" | "cursor" | "pi" | "opencode" | "dsh"
+    ) {
+        return Err("agent must be codex, claude, cursor, pi, opencode or dsh".into());
+    }
+    /* DSH：cordis 插件包，非 JSON hook。安装=复制内置 bridge + dsh plugin add，
+    卸载=dsh plugin remove + 删目录。 */
+    if agent == "dsh" {
+        if uninstall {
+            uninstall_dsh_bridge()?;
+        } else {
+            install_dsh_bridge()?;
+        }
+        return Ok(dsh_bridge_dir());
     }
     /* Pi / OpenCode：无 JSON hook 配置，桥接文件是用户级目录里的独立文件。
     安装=写入自有文件（幂等），卸载=删除自有文件（保留同目录其他文件）。 */
@@ -370,10 +525,22 @@ pub fn install_hooks(agent: &str, uninstall: bool) -> Result<PathBuf, String> {
 }
 
 pub fn status(agent: &str) -> Result<HookStatus, String> {
-    if !matches!(agent, "codex" | "claude" | "cursor" | "pi" | "opencode") {
-        return Err("agent must be codex, claude, cursor, pi or opencode".into());
+    if !matches!(
+        agent,
+        "codex" | "claude" | "cursor" | "pi" | "opencode" | "dsh"
+    ) {
+        return Err("agent must be codex, claude, cursor, pi, opencode or dsh".into());
     }
     let path = config_path(agent);
+    if agent == "dsh" {
+        let installed = dsh_installed();
+        return Ok(HookStatus {
+            agent: agent.to_owned(),
+            installed,
+            config_exists: dsh_bridge_dir().join("package.json").is_file(),
+            config_path: dsh_bridge_dir().to_string_lossy().into_owned(),
+        });
+    }
     if agent == "pi" || agent == "opencode" {
         /* Pi / OpenCode 的「配置」就是桥接文件本身：installed = 文件存在。 */
         let installed = path.is_file();
@@ -394,7 +561,7 @@ pub fn status(agent: &str) -> Result<HookStatus, String> {
 }
 
 pub fn statuses() -> Result<Vec<HookStatus>, String> {
-    ["codex", "claude", "cursor", "pi", "opencode"]
+    ["codex", "claude", "cursor", "pi", "opencode", "dsh"]
         .into_iter()
         .map(status)
         .collect()
@@ -424,6 +591,10 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::path::Path;
+    use std::sync::Mutex;
+
+    /* DSH 测试共享 TRELLIS_CARD_DSH_DIR env，必须串行，避免并行时互相覆盖。 */
+    static DSH_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn install_is_idempotent_and_preserves_foreign_hooks() {
@@ -558,11 +729,12 @@ mod tests {
 
     #[test]
     fn pi_install_writes_bridge_file_and_status_detects_it() {
-        let home = std::env::temp_dir().join(format!(
-            "trellis-card-pi-install-{}",
-            std::process::id()
-        ));
-        std::env::set_var("TRELLIS_CARD_PI_EXTENSIONS_FILE", home.join("trellis-card.ts"));
+        let home =
+            std::env::temp_dir().join(format!("trellis-card-pi-install-{}", std::process::id()));
+        std::env::set_var(
+            "TRELLIS_CARD_PI_EXTENSIONS_FILE",
+            home.join("trellis-card.ts"),
+        );
         let path = config_path("pi");
         let _ = std::fs::remove_file(&path);
 
@@ -584,7 +756,11 @@ mod tests {
         assert_eq!(content, same);
 
         /* 卸载：只删自有文件，同目录其他扩展保留 */
-        std::fs::write(home.join("other-extension.ts"), "export default function(pi){}\n").unwrap();
+        std::fs::write(
+            home.join("other-extension.ts"),
+            "export default function(pi){}\n",
+        )
+        .unwrap();
         install_hooks("pi", true).unwrap();
         assert!(!path.exists());
         assert!(home.join("other-extension.ts").exists());
@@ -616,7 +792,10 @@ mod tests {
             "trellis-card-opencode-install-{}",
             std::process::id()
         ));
-        std::env::set_var("TRELLIS_CARD_OPENCODE_PLUGIN_FILE", home.join("trellis-card.js"));
+        std::env::set_var(
+            "TRELLIS_CARD_OPENCODE_PLUGIN_FILE",
+            home.join("trellis-card.js"),
+        );
         let path = config_path("opencode");
         let _ = std::fs::remove_file(&path);
 
@@ -795,5 +974,134 @@ mod tests {
         merge_codex_features(&mut document).unwrap();
         assert_eq!(document["features"]["experimental"].as_bool(), Some(true));
         assert_eq!(document["features"]["hooks"].as_bool(), Some(true));
+    }
+
+    /* ---- DSH bridge（cordis 插件包）---- */
+
+    #[test]
+    fn dsh_config_path_default_uses_dsh_trellis_bridge_dir() {
+        let _guard = DSH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("TRELLIS_CARD_DSH_DIR");
+        let path = config_path("dsh");
+        /* 默认目录必须指向 agents/dsh-trellis-bridge（目录名 = npm 包名，dsh plugin link 依赖它） */
+        assert!(
+            path.to_string_lossy().ends_with("dsh-trellis-bridge"),
+            "dsh default config path should end with dsh-trellis-bridge, got {}",
+            path.display()
+        );
+        assert!(path.to_string_lossy().contains("agents"));
+    }
+
+    #[test]
+    fn dsh_config_path_env_override_wins() {
+        let _guard = DSH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root =
+            std::env::temp_dir().join(format!("trellis-card-dsh-cfg-{}", std::process::id()));
+        std::env::set_var(
+            "TRELLIS_CARD_DSH_DIR",
+            root.join("override-dir").display().to_string(),
+        );
+        let path = config_path("dsh");
+        assert_eq!(path, root.join("override-dir"));
+        std::env::remove_var("TRELLIS_CARD_DSH_DIR");
+    }
+
+    #[test]
+    fn dsh_write_bridge_writes_all_four_files() {
+        let _guard = DSH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root =
+            std::env::temp_dir().join(format!("trellis-card-dsh-write-{}", std::process::id()));
+        std::env::set_var("TRELLIS_CARD_DSH_DIR", root.display().to_string());
+        let dir = dsh_bridge_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        write_dsh_bridge(&dir).unwrap();
+        assert!(dir.join("package.json").is_file());
+        assert!(dir.join("cordis.patch.yml").is_file());
+        assert!(dir.join("src/index.js").is_file());
+        assert!(dir.join("src/lib.js").is_file());
+        let pkg = std::fs::read_to_string(dir.join("package.json")).unwrap();
+        assert!(pkg.contains("dsh-trellis-bridge"));
+        let index = std::fs::read_to_string(dir.join("src/index.js")).unwrap();
+        assert!(index.contains("session/event"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::remove_var("TRELLIS_CARD_DSH_DIR");
+    }
+
+    #[test]
+    fn dsh_status_reports_not_installed_without_manifest() {
+        let _guard = DSH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("trellis-card-dsh-st-{}", std::process::id()));
+        std::env::set_var(
+            "TRELLIS_CARD_DSH_DIR",
+            root.join("bridge").display().to_string(),
+        );
+        let manifest = root.join("profile-package.json");
+        std::env::set_var(
+            "TRELLIS_CARD_DSH_PROFILE_MANIFEST",
+            manifest.display().to_string(),
+        );
+        let dir = dsh_bridge_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        write_dsh_bridge(&dir).unwrap();
+        /* 无 profile manifest -> 未安装 */
+        let st = status("dsh").unwrap();
+        assert_eq!(st.agent, "dsh");
+        assert!(!st.installed);
+        assert!(st.config_exists);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::remove_var("TRELLIS_CARD_DSH_DIR");
+        std::env::remove_var("TRELLIS_CARD_DSH_PROFILE_MANIFEST");
+    }
+
+    #[test]
+    fn dsh_installed_true_when_profile_manifest_lists_bridge() {
+        let _guard = DSH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("trellis-card-dsh-in-{}", std::process::id()));
+        std::env::set_var(
+            "TRELLIS_CARD_DSH_DIR",
+            root.join("bridge").display().to_string(),
+        );
+        let manifest = root.join("profile-package.json");
+        std::env::set_var(
+            "TRELLIS_CARD_DSH_PROFILE_MANIFEST",
+            manifest.display().to_string(),
+        );
+        let dir = dsh_bridge_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        write_dsh_bridge(&dir).unwrap();
+        /* 构造 profile manifest，bundles 含 dsh-trellis-bridge */
+        std::fs::write(
+            &manifest,
+            r#"{"dsh":{"profile":{"bundles":["@deepseek-ai/dsh-base","dsh-trellis-bridge"]}}}"#,
+        )
+        .unwrap();
+        assert!(dsh_installed());
+        let st = status("dsh").unwrap();
+        assert!(st.installed);
+        /* bundles 不含 bridge -> 未安装 */
+        std::fs::write(
+            &manifest,
+            r#"{"dsh":{"profile":{"bundles":["@deepseek-ai/dsh-base"]}}}"#,
+        )
+        .unwrap();
+        assert!(!dsh_installed());
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::remove_var("TRELLIS_CARD_DSH_DIR");
+        std::env::remove_var("TRELLIS_CARD_DSH_PROFILE_MANIFEST");
+    }
+
+    #[test]
+    fn dsh_status_rejects_unknown_agent() {
+        assert!(install_hooks("unknown", false).is_err());
+        assert!(status("unknown").is_err());
+    }
+
+    #[test]
+    fn dsh_bin_finds_executable_when_installed() {
+        /* 本机若装了 dsh，应能定位到（PATH 或常见安装根）。未装则返回 None。 */
+        let found = dsh_bin();
+        if let Some(bin) = found {
+            assert!(bin.is_file(), "dsh_bin should point at an existing file: {}", bin.display());
+        }
     }
 }

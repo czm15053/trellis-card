@@ -1,0 +1,7 @@
+# dsh-trellis-bridge bundle patch: inserts the plugin row into the web
+# profile roster. Install with `dsh plugin --profile web add link:<this-dir>`;
+# the dsh.bundle.patch manifest field points here so dsh knows the plugin
+# row to insert. Pure observer — never blocks or rewrites dsh behavior.
+- insert:
+    - id: dsh-trellis-bridge
+      name: 'dsh-trellis-bridge'

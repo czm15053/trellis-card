@@ -42,6 +42,7 @@ const HOOK_AGENTS = Object.freeze([
   { id: 'cursor', label: 'Cursor', description: '采集 Cursor 会话中的任务和工具活动', configPath: '~/.cursor/hooks.json' },
   { id: 'pi', label: 'Pi', description: '采集 Pi 会话中的任务和工具活动', configPath: '~/.pi/agent/extensions/trellis-card.ts' },
   { id: 'opencode', label: 'OpenCode', description: '采集 OpenCode 会话中的任务和工具活动', configPath: '~/.config/opencode/plugins/trellis-card.js' },
+  { id: 'dsh', label: 'DeepSeek Harness', description: '采集 DeepSeek Harness 会话中的任务和工具活动', configPath: '~/.config/trellis-card/agents/dsh-trellis-bridge' },
 ]);
 /* star 色点取项目内「最紧急」kind：卡住 > 收束 > 动手 > 规划 */
 const KIND_URGENCY = { halt: 0, wrap: 1, work: 2, plan: 3, done: 4 };
@@ -3166,7 +3167,9 @@ async function toggleHook(agent) {
     const next = await call('configure_hook', { agent, enabled });
     if (!next || next.agent !== agent) throw new Error('返回的 Hook 状态格式无效');
     state.hookStatuses = state.hookStatuses.map((item) => item.agent === agent ? next : item);
-    toast(enabled ? `${label} Hook 已安装，请重启 ${label}` : `${label} Hook 已移除`);
+    /* DSH 的 bridge 是 cordis 插件，需重启 DeepSeek Harness 服务本身。 */
+    const restartHint = agent === 'dsh' ? '请重启 DeepSeek Harness' : `请重启 ${label}`;
+    toast(enabled ? `${label} Hook 已安装，${restartHint}` : `${label} Hook 已移除`);
   } catch (e) {
     console.error('[invoke:configure_hook]', e);
     toast(`${label} Hook 操作失败：${errMsg(e)}`);
