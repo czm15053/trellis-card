@@ -5,8 +5,12 @@
  *
  * `emit` is the only entry point: given a session + a session/event, it
  * produces zero or more hook payloads delivered through the injectable
- * `deliver` callback. The plugin entry wires `deliver` to spawn the
- * trellis-card binary.
+ * `deliver` callback. The plugin entry wires `deliver` to send to Trellis Card.
+ *
+ * `ctx` is an optional per-plugin cache object that avoids repeated
+ * filesystem probing and correlates tool results to their tool name:
+ *   { projectBySession: Map, toolNameBySession: Map }
+ * When omitted (unit tests), a fresh cache is used per emit.
  */
 
 import { existsSync } from 'node:fs'
@@ -61,19 +65,31 @@ function hashStr(s) {
   return (h >>> 0).toString(36)
 }
 
+/** Resolve the Trellis project root for a session, cached per session id. */
+function projectFor(sessionId, cwd, ctx) {
+  if (!cwd) return ''
+  const cached = ctx.projectBySession.get(sessionId)
+  if (cached !== undefined) return cached
+  const project = findTrellisRoot(cwd)
+  ctx.projectBySession.set(sessionId, project)
+  return project
+}
+
 /**
  * Translate one dsh session/event into Trellis Card hook payloads.
  * @param session - the dsh Session object (needs `.id` and `.header.cwd`).
  * @param event - the SessionEvent ({type, time, data}).
  * @param deliver - (payload) => void, called once per hook event to send.
- * @param seen - optional Set of session ids that already fired SessionStart.
+ * @param seen - Set of session ids that already fired SessionStart.
+ * @param ctx - optional per-plugin cache { projectBySession, toolNameBySession }.
  */
-export function emit(session, event, deliver, seen = new Set()) {
+export function emit(session, event, deliver, seen = new Set(), ctx) {
+  const cache = ctx || { projectBySession: new Map(), toolNameBySession: new Map() }
   const cwd = (session.header && session.header.cwd) || ''
-  const project = findTrellisRoot(cwd)
+  const sessionId = String(session.id || '')
+  const project = projectFor(sessionId, cwd, cache)
   if (!project) return // not a Trellis project -> observe nothing
 
-  const sessionId = String(session.id || '')
   const data = event.data || {}
   const base = {
     session_id: sessionId || `dsh_${hashStr(project + sessionId)}`,
@@ -95,6 +111,8 @@ export function emit(session, event, deliver, seen = new Set()) {
     case 'tool/call': {
       const name = data.name || ''
       if (!name) return
+      // Remember this session's latest tool name so tool/result can reuse it.
+      cache.toolNameBySession.set(sessionId, name)
       let toolInput = {}
       try {
         const parsed = JSON.parse(data.arguments || '{}')
@@ -112,7 +130,9 @@ export function emit(session, event, deliver, seen = new Set()) {
       break
     }
     case 'tool/result': {
-      // ToolResultBlock carries toolCallId, not the tool name; report settling.
+      // ToolResultBlock carries toolCallId, not the tool name; reuse the name
+      // recorded from the preceding tool/call for this session.
+      const name = cache.toolNameBySession.get(sessionId) || ''
       const blocks = data.message && data.message.content
       const toolCallId = Array.isArray(blocks) && blocks[0] && blocks[0].toolCallId
         ? String(blocks[0].toolCallId)
@@ -120,18 +140,19 @@ export function emit(session, event, deliver, seen = new Set()) {
       deliver({
         ...base,
         hook_event_name: 'PostToolUse',
-        tool_name: '',
+        tool_name: name,
         tool_call_id: toolCallId,
         is_error: Boolean(data.error),
       })
       break
     }
     case 'step/start': {
+      /* 只在会话首次投递 SessionStart；后续 step/start 不投递——它没有工具信息，
+      投递成 StepStart 会覆盖 trellis-card runtime 里上次 tool/call 的工具名，导致
+      卡片拿不到工具调用。工具活动由 tool/call -> PreToolUse 表达。 */
       if (!seen.has(sessionId)) {
         seen.add(sessionId)
         deliver({ ...base, hook_event_name: 'SessionStart' })
-      } else {
-        deliver({ ...base, hook_event_name: 'StepStart', activity: `step ${data.turn}.${data.step}` })
       }
       break
     }

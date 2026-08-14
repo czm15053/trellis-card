@@ -148,9 +148,14 @@ impl SessionRegistry {
         entry.state = agent_state;
         entry.waiting_reason = waiting_reason;
         entry.event_name = event.event_name;
-        entry.tool_name = event.tool_name;
-        entry.tool_input = event.tool_input;
-        entry.activity = event.activity;
+        /* 终态事件（Stop / sessionEnd / idle 等）通常不带工具信息；保留上一次的
+        tool_name/tool_input/activity，让卡片在会话结束后仍显示最后的活动，而不是被
+        清空。高频 agent（dsh 等）的会话频繁结束，若每次都清空会导致工具调用「没反应」。 */
+        if !terminal {
+            entry.tool_name = event.tool_name;
+            entry.tool_input = event.tool_input;
+            entry.activity = event.activity;
+        }
         entry.updated_at = event.timestamp;
         true
     }

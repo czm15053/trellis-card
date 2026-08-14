@@ -2,15 +2,20 @@
  * dsh-trellis-bridge — Trellis Card bridge plugin for DSH (DeepSeek Harness).
  *
  * Pure observer: forwards dsh session/tool activity to Trellis Card over the
- * same hook channel used by the codex/claude/cursor/pi/opencode hooks. It
- * never blocks, rewrites, or injects anything into dsh's behavior.
+ * same socket/inbox channel used by the codex/claude/cursor/pi/opencode hooks.
+ * It never blocks, rewrites, or injects anything into dsh's behavior.
  *
  * Install: `dsh plugin --profile web add link:<this-dir>` (the
  * dsh.bundle.patch manifest field points at ./cordis.patch.yml). Runs in the
  * dsh host process, subscribing to the `session/event` firehose.
  *
  * The mapping logic lives in ./lib.js (unit-testable); this file is the
- * cordis plugin entry that wires it to spawn the trellis-card binary.
+ * cordis plugin entry that wires it to deliver to Trellis Card.
+ *
+ * Delivery: spawn the trellis-card binary per event (same as Pi/OpenCode
+ * bridges). Trellis Card's socket server reads the whole stream until EOF
+ * (read_to_string), so the connection must close per event — a persistent
+ * socket never flushes. Spawn per event guarantees delivery.
  */
 
 import { existsSync } from 'node:fs'
@@ -99,6 +104,9 @@ const deliverHook = (payload) => deliver(payload)
 /** Track whether each session already sent a SessionStart. */
 const seen = new Set()
 
+/** Per-plugin cache: project roots and tool names keyed by session id. */
+const cache = { projectBySession: new Map(), toolNameBySession: new Map() }
+
 /* ── Plugin entry ─────────────────────────────────────────────────────── */
 
 export function apply(ctx) {
@@ -109,7 +117,7 @@ export function apply(ctx) {
   ctx.effect(() => {
     const dispose = ctx.root.on('session/event', (session, event) => {
       try {
-        emit(session, event, deliverHook, seen)
+        emit(session, event, deliverHook, seen, cache)
       } catch {
         /* observer must never break dsh */
       }
