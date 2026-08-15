@@ -461,15 +461,15 @@ fn codex_config_path() -> PathBuf {
 
 /* WSL 观察模式下的用户 home UNC：`\\wsl$\<distro>\home\<user>`。
 /root 用户映射到 `\\wsl$\<distro>\root`（WSL 默认 root 家目录在 /root）。
-在非 Windows（测试）环境用 env TRELLIS_CARD_WSL_HOME 显式注入，否则 None。 */
+env TRELLIS_CARD_WSL_HOME 优先（测试注入 + 用户显式覆盖，如 root 或非标准 home）；
+未设置时 Windows 上运行 wsl.exe 读 WSL 内 HOME，其他平台返回 None。 */
 fn wsl_home_unc(distro: &str) -> Option<PathBuf> {
-    let _ = distro;
-    #[cfg(not(windows))]
-    {
-        /* 非 Windows（测试）环境：用 env TRELLIS_CARD_WSL_HOME 显式注入 WSL home UNC。 */
-        std::env::var("TRELLIS_CARD_WSL_HOME")
-            .ok()
-            .map(PathBuf::from)
+    let _ = distro; // 非 Windows 分支不使用；Windows 分支 shadow 后使用
+    if let Ok(home) = std::env::var("TRELLIS_CARD_WSL_HOME") {
+        let home = home.trim().to_string();
+        if !home.is_empty() {
+            return Some(PathBuf::from(home));
+        }
     }
     #[cfg(windows)]
     {
@@ -493,6 +493,10 @@ fn wsl_home_unc(distro: &str) -> Option<PathBuf> {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "/root".to_string());
         crate::platform::wsl_unc_from_linux(&home, &distro).map(PathBuf::from)
+    }
+    #[cfg(not(windows))]
+    {
+        None
     }
 }
 
