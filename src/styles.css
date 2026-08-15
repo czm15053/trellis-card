@@ -1398,6 +1398,9 @@ body.rel-canvas .rel-graph{
 .mini:disabled{opacity:.48;cursor:wait;transform:none}
 .mini svg{flex:0 0 auto}
 .mini.block{width:100%;margin-top:2px}
+/* WSL 观察模式的发行版选择器：select 而非按钮语义，保持主题一致的边框/配色 */
+select.mini.wsl-select{max-width:150px;cursor:pointer;appearance:auto;-webkit-appearance:auto;font-weight:600;padding:4px 6px}
+select.mini.wsl-select:disabled{opacity:.48;cursor:wait}
 
 /* ---------- 按钮 / 工具条 / 状态行（钉在底部） ---------- */
 .btn{border:1px solid var(--line2);background:color-mix(in srgb, var(--chalk) 6%, transparent);color:var(--chalk);font-family:var(--font);font-size:12px;font-weight:700;padding:8px 12px;border-radius:11px;cursor:pointer;transition:.15s}

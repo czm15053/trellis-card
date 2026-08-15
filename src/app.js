@@ -86,6 +86,8 @@ const state = {
   hookStatusRequested: false,
   hookStatusError: null,
   hookUpdatingAgent: null,
+  wslInfo: { distros: [], current: null },   // WSL 观察模式：可用发行版 + 当前配置
+  wslLoading: false,
   setupBusy: false,
   menuOpen: false,
   themeOpen: false,
@@ -3080,6 +3082,74 @@ function hookStatusTone(agent) {
   const status = hookStatus(agent);
   return status && status.installed ? 'installed' : 'missing';
 }
+/* ---------- WSL 观察模式 ---------- */
+async function loadWslInfo() {
+  if (state.wslLoading) return;
+  state.wslLoading = true;
+  try {
+    const info = await call('get_wsl_info');
+    if (info && Array.isArray(info.distros)) {
+      state.wslInfo = { distros: info.distros, current: info.current || null };
+    }
+  } catch (e) {
+    console.error('[invoke:get_wsl_info]', e);
+  } finally {
+    state.wslLoading = false;
+    if (state.adminOpen) render();
+  }
+}
+async function setWslDistro(distro) {
+  state.wslLoading = true;
+  render();
+  try {
+    await call('set_wsl_distro', { distro });
+    state.wslInfo.current = distro || null;
+    toast(distro ? `已启用 WSL 观察（${distro}）` : '已停用 WSL 观察');
+    /* 配置变了，重新检测 hook 状态（安装位置取决于 WSL 模式） */
+    state.hookStatusRequested = false;
+    await refreshHookStatuses(true);
+  } catch (e) {
+    console.error('[invoke:set_wsl_distro]', e);
+    toast(`WSL 配置失败：${errMsg(e)}`);
+  } finally {
+    state.wslLoading = false;
+    render();
+  }
+}
+function renderWslSection(body) {
+  body.appendChild(secTitle('WSL 观察'));
+  const guide = document.createElement('div');
+  guide.className = 'hook-guide';
+  guide.innerHTML = `<strong>观察 WSL 内的 Trellis 项目</strong><span>在 Windows 上运行 Trellis Card，但 Agent（Claude / Codex 等）运行在 WSL 里。启用后，Agent 的 Hook 会写入 WSL 侧配置，项目以 <code>\\\\wsl$\\&lt;发行版&gt;\\...</code> 路径观察。</span>`;
+  body.appendChild(guide);
+  const current = state.wslInfo.current;
+  const distros = state.wslInfo.distros || [];
+  const options = ['', ...distros];
+  /* 当前未配置时默认项为空串（= 停用）；已配置则补进选项 */
+  if (current && !options.includes(current)) options.push(current);
+  const wrap = document.createElement('div');
+  wrap.className = 'adm-row';
+  const label = document.createElement('div');
+  label.className = 'adm-info';
+  label.innerHTML = `<div class="adm-name">WSL 发行版</div><div class="adm-path">${current ? esc(current) : '未启用（仅观察 Windows 本机）'}</div>`;
+  wrap.appendChild(label);
+  const sel = document.createElement('select');
+  sel.className = 'mini wsl-select';
+  sel.disabled = state.wslLoading;
+  for (const d of options) {
+    const opt = document.createElement('option');
+    opt.value = d;
+    opt.textContent = d || '— 停用 —';
+    if ((!current && !d) || d === current) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  sel.onchange = () => setWslDistro(sel.value || null);
+  wrap.appendChild(sel);
+  body.appendChild(wrap);
+  if (distros.length === 0 && !current) {
+    body.appendChild(note('未检测到 WSL 发行版（需在 Windows 上运行，且已安装 WSL）。'));
+  }
+}
 function renderHookSection(body) {
   body.appendChild(secTitle('Agent 接入'));
 
@@ -3190,6 +3260,7 @@ function renderAdmin() {
   const body = $('adminBody');
   body.innerHTML = '';
 
+  renderWslSection(body);
   renderHookSection(body);
 
   /* Configure：根目录可写在前，已发现项目只读在后 */
@@ -4089,6 +4160,8 @@ async function boot() {
     state.alwaysOnTop = !!cfg.alwaysOnTop;   /* 后端为权威来源 */
     state.configured = !!cfg.configured;
   }
+  /* WSL 观察模式信息（发行版列表 + 当前配置），异步加载，不阻塞首屏 */
+  loadWslInfo();
   /* 事件订阅在首屏 refresh 前注册：消除「首屏 render 完成 → 订阅就绪」之间的
      丢事件窗口期。bindWatch 只注册 listen，不依赖 refresh 结果或 main DOM。 */
   bindWatch();

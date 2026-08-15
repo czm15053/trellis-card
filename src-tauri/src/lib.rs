@@ -79,6 +79,8 @@ struct ConfigOut {
     roots: Vec<String>,
     always_on_top: bool,
     configured: bool,
+    /* WSL 观察模式：当前配置的发行版名（None = 未启用） */
+    wsl_distro: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -719,7 +721,34 @@ fn get_config(state: State<AppState>) -> ConfigOut {
         configured: cfg.initialized || !cfg.roots.is_empty() || !cfg.dynamic_projects.is_empty(),
         roots: cfg.roots.clone(),
         always_on_top: cfg.always_on_top,
+        wsl_distro: cfg.wsl_distro.clone(),
     }
+}
+
+/* WSL 观察模式配置：检测可用发行版 + 返回当前已配置的发行版（None = 未启用）。 */
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WslInfo {
+    distros: Vec<String>,
+    current: Option<String>,
+}
+
+#[tauri::command]
+fn get_wsl_info(state: State<AppState>) -> WslInfo {
+    let current = state.config.lock().unwrap().wsl_distro.clone();
+    WslInfo {
+        distros: crate::platform::detect_wsl_distros(),
+        current,
+    }
+}
+
+#[tauri::command]
+fn set_wsl_distro(state: State<AppState>, distro: Option<String>) -> Result<(), String> {
+    let distro = distro
+        .filter(|d| !d.trim().is_empty())
+        .map(|d| d.trim().to_string());
+    state.config.lock().unwrap().wsl_distro = distro;
+    save_state(&state)
 }
 
 #[tauri::command]
@@ -828,8 +857,8 @@ fn list_relations(state: State<AppState>, project: String) -> Result<RelationsPa
         return Err("项目未在扫描目录中".into());
     }
     /* 关联视图纳入归档任务（spec 共享 / 父子 / 内容树都覆盖归档），
-       归档任务的 spec_refs 可能引用已归档的 spec，但正是历史「地盘」的真实痕迹。
-       归档任务用 archived + dir 标记，前端 keyOf 用 dir 区分身份。 */
+    归档任务的 spec_refs 可能引用已归档的 spec，但正是历史「地盘」的真实痕迹。
+    归档任务用 archived + dir 标记，前端 keyOf 用 dir 区分身份。 */
     let (tasks, _) = scan::scan_tasks_with_archived(&expand(&project));
     let task_relations: Vec<TaskRelation> = tasks
         .iter()
@@ -875,25 +904,46 @@ fn list_specs(state: State<AppState>, project: String) -> Result<Vec<SpecOut>, S
     if let Ok(entries) = std::fs::read_dir(&spec_root) {
         for e in entries.flatten() {
             let dir = e.path();
-            if !dir.is_dir() || dir.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
+            if !dir.is_dir()
+                || dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().starts_with('.'))
+                    .unwrap_or(false)
+            {
                 continue;
             }
-            let category = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let category = dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             if let Ok(inner) = std::fs::read_dir(&dir) {
                 for f in inner.flatten() {
                     let p = f.path();
                     if p.extension().map(|x| x == "md").unwrap_or(false) {
-                        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        let name = p
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
                         let content = std::fs::read_to_string(&p).unwrap_or_default();
                         /* 填写状态：有效行数（非空、非注释）超过阈值算「已沉淀经验」 */
-                        let real_lines = content.lines().filter(|l| {
-                            let t = l.trim();
-                            !t.is_empty() && !t.starts_with("<!--") && !t.contains("To be filled") && !t.contains("To fill")
-                        }).count();
+                        let real_lines = content
+                            .lines()
+                            .filter(|l| {
+                                let t = l.trim();
+                                !t.is_empty()
+                                    && !t.starts_with("<!--")
+                                    && !t.contains("To be filled")
+                                    && !t.contains("To fill")
+                            })
+                            .count();
                         let rel_path = format!("{}/{}", category, name);
                         specs.push(SpecOut {
                             path: rel_path,
-                            name: if name == "index.md" { category.clone() } else { name.trim_end_matches(".md").to_string() },
+                            name: if name == "index.md" {
+                                category.clone()
+                            } else {
+                                name.trim_end_matches(".md").to_string()
+                            },
                             category: category.clone(),
                             filled: real_lines >= 40,
                             line_count: real_lines,
@@ -914,17 +964,24 @@ fn list_specs(state: State<AppState>, project: String) -> Result<Vec<SpecOut>, S
 fn compute_prd_groups(relations: &[TaskRelation]) -> Vec<PrdGroup> {
     let valid_ids: std::collections::HashSet<&str> =
         relations.iter().map(|t| t.id.as_str()).collect();
-    let mut ref_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut ref_map: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
     for t in relations {
         for ref_id in &t.prd_refs {
             if valid_ids.contains(ref_id.as_str()) && ref_id != &t.id {
-                ref_map.entry(ref_id.clone()).or_default().push(t.id.clone());
+                ref_map
+                    .entry(ref_id.clone())
+                    .or_default()
+                    .push(t.id.clone());
             }
         }
     }
     ref_map
         .into_iter()
-        .map(|(ref_task_id, task_ids)| PrdGroup { ref_task_id, task_ids })
+        .map(|(ref_task_id, task_ids)| PrdGroup {
+            ref_task_id,
+            task_ids,
+        })
         .collect()
 }
 
@@ -1073,6 +1130,22 @@ fn resolve_archivable_task(
 // 成功后 emit tasks-changed / runtime-reconciliation-needed 触发前端刷新（目录移动
 // 不一定落在 watch 的相关文件路径上，主动通知保证列表即时收敛）。
 #[tauri::command]
+/* WSL 观察模式下 archive 的 wsl.exe 命令参数（纯函数，可单测）：
+`wsl.exe -d <distro> --cd <linux_project> python3 <linux_script> archive <task>`。
+返回 (distro, linux_project, linux_script)；任一路径无法转回 Linux 时 Err。 */
+fn wsl_archive_command(
+    distro: &str,
+    project_unc: &str,
+    script_unc: &str,
+) -> Result<(String, String, String), String> {
+    let linux_project = crate::platform::linux_from_wsl_unc(project_unc)
+        .ok_or_else(|| "无法将项目 UNC 路径转回 WSL Linux 路径".to_string())?;
+    let linux_script = crate::platform::linux_from_wsl_unc(script_unc)
+        .ok_or_else(|| "无法将 task.py 路径转回 WSL Linux 路径".to_string())?;
+    Ok((distro.to_string(), linux_project, linux_script))
+}
+
+#[tauri::command]
 fn archive_task(
     app: AppHandle,
     state: State<AppState>,
@@ -1080,6 +1153,35 @@ fn archive_task(
     task: String,
 ) -> Result<bool, String> {
     let (project_dir, script) = resolve_archivable_task(&state, &project, &task)?;
+    /* WSL 观察模式：项目在 \\wsl$\<distro>\... 下，task.py 只能由 WSL 内 Python
+    执行（Windows Python 无法跨 9P 运行 shebang/相对路径）。经 wsl.exe 调用，
+    路径转回 Linux 形式，cwd 用 --cd 设为 WSL 内项目目录。 */
+    if let Some(distro) = crate::platform::wsl_distro() {
+        let (distro, linux_project, linux_script) = wsl_archive_command(
+            &distro,
+            &project_dir.to_string_lossy(),
+            &script.to_string_lossy(),
+        )?;
+        let output = std::process::Command::new("wsl.exe")
+            .args(["-d", &distro])
+            .arg("--cd")
+            .arg(&linux_project)
+            .args(["python3", &linux_script, "archive", &task])
+            .output()
+            .map_err(|e| format!("执行 task.py archive 失败: {e}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return Err(format!(
+                "task.py archive 失败: {}{}",
+                if stdout.is_empty() { "" } else { &stdout },
+                if stderr.is_empty() { "" } else { &stderr }
+            ));
+        }
+        let _ = app.emit("tasks-changed", ());
+        let _ = app.emit("runtime-reconciliation-needed", ());
+        return Ok(true);
+    }
     // 按平台候选探测可用的 Python 命令（win32: python/python3/py -3）
     let python = resolve_python_command();
     let output = std::process::Command::new(python)
@@ -1225,7 +1327,7 @@ fn snap_window_top(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .ok_or("无当前显示器")?;
     /* monitor.position()/size() 与 outer_size() 均为物理像素，统一在物理坐标计算。
-       set_position(PhysicalPosition) 原样应用，无需按 scale 换算。 */
+    set_position(PhysicalPosition) 原样应用，无需按 scale 换算。 */
     let mpos = monitor.position();
     let msize = monitor.size();
     let wsize = window.outer_size().map_err(|e| e.to_string())?;
@@ -1354,6 +1456,8 @@ pub fn run() {
             get_runtime_snapshot,
             get_hook_statuses,
             configure_hook,
+            get_wsl_info,
+            set_wsl_distro,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1511,7 +1615,11 @@ mod tests {
             title: id.into(),
             status: "in_progress".into(),
             priority: Some("P2".into()),
-            phase: scan::Phase { id: "implement".into(), label: "实现中".into(), warn: false },
+            phase: scan::Phase {
+                id: "implement".into(),
+                label: "实现中".into(),
+                warn: false,
+            },
             dev_type: None,
             scope: None,
             parent: None,
@@ -1545,7 +1653,11 @@ mod tests {
             title: id.into(),
             status: "in_progress".into(),
             priority: Some("P2".into()),
-            phase: scan::Phase { id: "implement".into(), label: "实现中".into(), warn: false },
+            phase: scan::Phase {
+                id: "implement".into(),
+                label: "实现中".into(),
+                warn: false,
+            },
             dev_type: None,
             scope: None,
             parent: None,
@@ -1574,7 +1686,11 @@ mod tests {
             title: id.into(),
             status: "in_progress".into(),
             priority: Some("P2".into()),
-            phase: scan::Phase { id: "implement".into(), label: "实现中".into(), warn: false },
+            phase: scan::Phase {
+                id: "implement".into(),
+                label: "实现中".into(),
+                warn: false,
+            },
             dev_type: None,
             scope: None,
             parent: None,
@@ -1619,6 +1735,7 @@ mod tests {
             dynamic_projects: vec![project.to_string_lossy().into_owned()],
             initialized: false,
             always_on_top: false,
+            wsl_distro: None,
         };
 
         assert_eq!(discover_all(&cfg), vec![project.clone()]);
@@ -1666,6 +1783,7 @@ mod tests {
             dynamic_projects: vec![],
             initialized: false,
             always_on_top: false,
+            wsl_distro: None,
         };
 
         assert!(is_discovered_project(&cfg, &child));
@@ -1733,6 +1851,31 @@ mod tests {
         assert_eq!(fit_target_height(50.0), 160.0);
     }
 
+    /* ---- WSL archive 命令 ---- */
+
+    #[test]
+    fn wsl_archive_command_builds_wsl_exe_args() {
+        let (distro, project, script) = wsl_archive_command(
+            "Ubuntu",
+            r"\\wsl$\Ubuntu\home\alice\proj",
+            r"\\wsl$\Ubuntu\home\alice\proj\.trellis\scripts\task.py",
+        )
+        .unwrap();
+        assert_eq!(distro, "Ubuntu");
+        assert_eq!(project, "/home/alice/proj");
+        assert_eq!(script, "/home/alice/proj/.trellis/scripts/task.py");
+    }
+
+    #[test]
+    fn wsl_archive_command_rejects_non_wsl_unc_paths() {
+        assert!(wsl_archive_command(
+            "Ubuntu",
+            r"C:\Users\alice\proj",
+            r"C:\Users\alice\proj\.trellis\scripts\task.py",
+        )
+        .is_err());
+    }
+
     #[test]
     fn completion_pending_event_carries_project_task_completed_at() {
         /* 集成：模拟 reducer 写入 pending，验证 payload 字段 */
@@ -1781,6 +1924,7 @@ mod tests {
                 dynamic_projects: vec![],
                 initialized: true,
                 always_on_top: false,
+                wsl_distro: None,
             }),
             runtime: Mutex::new(RuntimeStore::default()),
             runtime_coord: RuntimeCoordinator::new(),

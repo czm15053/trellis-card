@@ -175,7 +175,10 @@ fn dsh_bin() -> Option<PathBuf> {
         "$HOME/.local/bin/dsh",
     ];
     for raw in candidates {
-        let path = PathBuf::from(raw.replace("$HOME", &dirs::home_dir().unwrap_or_default().to_string_lossy()));
+        let path = PathBuf::from(raw.replace(
+            "$HOME",
+            &dirs::home_dir().unwrap_or_default().to_string_lossy(),
+        ));
         if path.is_file() {
             return Some(path);
         }
@@ -193,8 +196,9 @@ fn dsh_bin() -> Option<PathBuf> {
 
 /** Run `dsh plugin --profile <p> <args...>` and return stdout/stderr on failure. */
 fn dsh_plugin(args: &[&str]) -> Result<String, String> {
-    let bin = dsh_bin()
-        .ok_or_else(|| "无法定位 dsh CLI：请确认已安装 DeepSeek Harness（npm i -g @deepseek-ai/dsh）".to_string())?;
+    let bin = dsh_bin().ok_or_else(|| {
+        "无法定位 dsh CLI：请确认已安装 DeepSeek Harness（npm i -g @deepseek-ai/dsh）".to_string()
+    })?;
     let output = Command::new(&bin)
         .args(["plugin", "--profile", DSH_PROFILE])
         .args(args)
@@ -431,6 +435,13 @@ fn config_path(agent: &str) -> PathBuf {
     if let Ok(path) = std::env::var(env_key) {
         return PathBuf::from(path);
     }
+    /* WSL 观察模式：配置写到 WSL 侧 agent 的 home（\\wsl$\<distro>\home\<user>\...）。
+    子进程 hook 或应用侧均可设置 TRELLIS_CARD_WSL_DISTRO 触发。 */
+    if let Some(distro) = crate::platform::wsl_distro() {
+        if let Some(unc_home) = wsl_home_unc(&distro) {
+            return default_config_path(agent, &unc_home);
+        }
+    }
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     default_config_path(agent, &home)
 }
@@ -439,8 +450,50 @@ fn codex_config_path() -> PathBuf {
     if let Ok(path) = std::env::var("TRELLIS_CARD_CODEX_CONFIG_TOML") {
         return PathBuf::from(path);
     }
+    if let Some(distro) = crate::platform::wsl_distro() {
+        if let Some(unc_home) = wsl_home_unc(&distro) {
+            return unc_home.join(".codex/config.toml");
+        }
+    }
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.join(".codex/config.toml")
+}
+
+/* WSL 观察模式下的用户 home UNC：`\\wsl$\<distro>\home\<user>`。
+/root 用户映射到 `\\wsl$\<distro>\root`（WSL 默认 root 家目录在 /root）。
+在非 Windows（测试）环境用 env TRELLIS_CARD_WSL_HOME 显式注入，否则 None。 */
+fn wsl_home_unc(distro: &str) -> Option<PathBuf> {
+    let _ = distro;
+    #[cfg(not(windows))]
+    {
+        /* 非 Windows（测试）环境：用 env TRELLIS_CARD_WSL_HOME 显式注入 WSL home UNC。 */
+        std::env::var("TRELLIS_CARD_WSL_HOME")
+            .ok()
+            .map(PathBuf::from)
+    }
+    #[cfg(windows)]
+    {
+        let distro = distro.trim().to_string();
+        if distro.is_empty() {
+            return None;
+        }
+        /* 运行 wsl.exe 取 WSL 内 HOME（如 /home/alice）；失败时回退 /root。
+        用 `wsl.exe -d <distro> -e sh -c 'echo $HOME'` 读取。 */
+        let output = std::process::Command::new("wsl.exe")
+            .args(["-d", &distro, "-e", "sh", "-c", "echo $HOME"])
+            .output();
+        let home = output
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                crate::platform::decode_wsl_output(&o.stdout)
+                    .trim()
+                    .to_string()
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "/root".to_string());
+        crate::platform::wsl_unc_from_linux(&home, &distro).map(PathBuf::from)
+    }
 }
 
 fn default_config_path(agent: &str, home: &Path) -> PathBuf {
@@ -455,6 +508,15 @@ fn default_config_path(agent: &str, home: &Path) -> PathBuf {
 }
 
 fn hook_command(executable: &Path, agent: &str) -> String {
+    /* WSL 观察模式：hook 由 WSL 内 agent 触发，执行的是 Windows 侧 trellis-card.exe。
+    agent 在 WSL（bash）里 spawn 命令，exe 路径必须是 WSL 挂载形式 /mnt/c/...，
+    用 bash 语法（引号路径 + 反斜杠不转义）。 */
+    if crate::platform::wsl_distro().is_some() {
+        let path = executable.to_string_lossy();
+        if let Some(wsl_path) = crate::platform::windows_to_wsl_path(&path) {
+            return format!(r#""{wsl_path}" hook --agent {agent}"#);
+        }
+    }
     let path = executable.to_string_lossy();
     if cfg!(windows) {
         /* Hook 可能由 cmd.exe 或 PowerShell 执行。显式启动 PowerShell，避免
@@ -596,6 +658,10 @@ mod tests {
     /* DSH 测试共享 TRELLIS_CARD_DSH_DIR env，必须串行，避免并行时互相覆盖。 */
     static DSH_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    /* WSL 测试设置/清除 TRELLIS_CARD_WSL_DISTRO 等 env，会与其他依赖这些 env
+    的测试（含原有 hook_command 平台语法测试）竞态，必须串行。 */
+    static WSL_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn install_is_idempotent_and_preserves_foreign_hooks() {
         let mut config = json!({
@@ -645,6 +711,9 @@ mod tests {
 
     #[test]
     fn hook_command_uses_platform_shell_syntax() {
+        /* WSL env 会改变 hook_command 输出，加锁避免并行竞态。 */
+        let _guard = WSL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("TRELLIS_CARD_WSL_DISTRO");
         let command = hook_command(
             Path::new(r#"C:\Program Files\Trellis-Card\trellis-card.exe"#),
             "claude",
@@ -1096,12 +1165,109 @@ mod tests {
         assert!(status("unknown").is_err());
     }
 
+    /* ---- WSL 观察模式：配置路径与 hook command ---- */
+
+    #[test]
+    fn config_path_uses_wsl_home_unc_when_distro_configured() {
+        let _guard = WSL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("TRELLIS_CARD_WSL_DISTRO", "Ubuntu");
+        std::env::set_var("TRELLIS_CARD_WSL_HOME", r"\\wsl$\Ubuntu\home\alice");
+        let posix = |p: &PathBuf| crate::platform::to_posix(&p.to_string_lossy());
+        assert_eq!(
+            posix(&config_path("claude")),
+            "//wsl$/Ubuntu/home/alice/.claude/settings.json"
+        );
+        assert_eq!(
+            posix(&config_path("codex")),
+            "//wsl$/Ubuntu/home/alice/.codex/hooks.json"
+        );
+        assert_eq!(
+            posix(&config_path("cursor")),
+            "//wsl$/Ubuntu/home/alice/.cursor/hooks.json"
+        );
+        assert_eq!(
+            posix(&config_path("pi")),
+            "//wsl$/Ubuntu/home/alice/.pi/agent/extensions/trellis-card.ts"
+        );
+        assert_eq!(
+            posix(&config_path("opencode")),
+            "//wsl$/Ubuntu/home/alice/.config/opencode/plugins/trellis-card.js"
+        );
+        /* env 覆盖仍优先于 WSL 推导 */
+        std::env::set_var("TRELLIS_CARD_CLAUDE_CONFIG", r"C:\custom\settings.json");
+        assert_eq!(
+            config_path("claude").to_string_lossy(),
+            r"C:\custom\settings.json"
+        );
+        std::env::remove_var("TRELLIS_CARD_WSL_DISTRO");
+        std::env::remove_var("TRELLIS_CARD_WSL_HOME");
+        std::env::remove_var("TRELLIS_CARD_CLAUDE_CONFIG");
+    }
+
+    #[test]
+    fn codex_toml_path_uses_wsl_home_when_distro_configured() {
+        let _guard = WSL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("TRELLIS_CARD_WSL_DISTRO", "Ubuntu");
+        std::env::set_var("TRELLIS_CARD_WSL_HOME", r"\\wsl$\Ubuntu\home\alice");
+        assert_eq!(
+            crate::platform::to_posix(&codex_config_path().to_string_lossy()),
+            "//wsl$/Ubuntu/home/alice/.codex/config.toml"
+        );
+        std::env::set_var("TRELLIS_CARD_CODEX_CONFIG_TOML", r"C:\codex\config.toml");
+        assert_eq!(
+            codex_config_path().to_string_lossy(),
+            r"C:\codex\config.toml"
+        );
+        std::env::remove_var("TRELLIS_CARD_WSL_DISTRO");
+        std::env::remove_var("TRELLIS_CARD_WSL_HOME");
+        std::env::remove_var("TRELLIS_CARD_CODEX_CONFIG_TOML");
+    }
+
+    #[test]
+    fn hook_command_uses_wsl_mount_path_when_distro_configured() {
+        let _guard = WSL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("TRELLIS_CARD_WSL_DISTRO", "Ubuntu");
+        let exe = Path::new(r"C:\Program Files\Trellis-Card\trellis-card.exe");
+        let command = hook_command(exe, "claude");
+        assert_eq!(
+            command,
+            r#""/mnt/c/Program Files/Trellis-Card/trellis-card.exe" hook --agent claude"#
+        );
+        std::env::remove_var("TRELLIS_CARD_WSL_DISTRO");
+    }
+
+    #[test]
+    fn hook_command_without_wsl_uses_platform_shell() {
+        /* WSL env 会改变 hook_command 输出，加锁避免并行竞态。 */
+        let _guard = WSL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("TRELLIS_CARD_WSL_DISTRO");
+        let command = hook_command(
+            Path::new(r#"C:\Program Files\Trellis-Card\trellis-card.exe"#),
+            "claude",
+        );
+        if cfg!(windows) {
+            assert_eq!(
+                command,
+                r#"powershell.exe -NoProfile -NonInteractive -Command "& 'C:\Program Files\Trellis-Card\trellis-card.exe' hook --agent claude""#
+            );
+        } else {
+            assert_eq!(
+                command,
+                r#""C:\Program Files\Trellis-Card\trellis-card.exe" hook --agent claude"#
+            );
+        }
+    }
+
     #[test]
     fn dsh_bin_finds_executable_when_installed() {
         /* 本机若装了 dsh，应能定位到（PATH 或常见安装根）。未装则返回 None。 */
         let found = dsh_bin();
         if let Some(bin) = found {
-            assert!(bin.is_file(), "dsh_bin should point at an existing file: {}", bin.display());
+            assert!(
+                bin.is_file(),
+                "dsh_bin should point at an existing file: {}",
+                bin.display()
+            );
         }
     }
 }

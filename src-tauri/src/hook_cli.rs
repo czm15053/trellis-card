@@ -334,6 +334,10 @@ pub fn parse_hook_payload(input: &str, overrides: &HookOverrides) -> Result<Hook
                 .into_owned()
         });
     let project = project_root_for_path(&project);
+    /* WSL 观察模式：agent 在 WSL 里上报 Linux 项目路径（/home/alice/proj），
+    转成 Windows 侧可访问的 UNC（\\wsl$\<distro>\home\alice\proj），否则 Card
+    在 Windows 侧无法定位/读取该项目。已是 UNC 或非 WSL 模式原样返回。 */
+    let project = crate::platform::maybe_to_wsl_unc(&project);
     let session_id = overrides
         .session
         .clone()
@@ -917,5 +921,21 @@ mod tests {
         assert_eq!(event.agent_kind, "opencode");
         assert_eq!(event.tool_name.as_deref(), Some("read"));
         assert!(event.activity.is_some());
+    }
+
+    /* ---- WSL 事件路径归一化 ----
+    注意：不设置 TRELLIS_CARD_WSL_DISTRO env（会进程级污染并行测试）。
+    转换行为本身由 platform.rs 的 maybe_to_wsl_unc 纯函数测试覆盖；
+    这里只验证 parse 在「非 WSL 模式」下不做转换，且 UNC 路径原样通过。 */
+
+    #[test]
+    fn wsl_unc_project_path_passes_through_without_env() {
+        /* 即使未设 WSL env，已是 UNC 的 project 也应原样保留。 */
+        let overrides = HookOverrides {
+            project: Some(r"\\wsl$\Ubuntu\home\alice\proj".into()),
+            ..HookOverrides::default()
+        };
+        let event = parse_hook_payload(r#"{"hook_event_name":"PreToolUse"}"#, &overrides).unwrap();
+        assert_eq!(event.project, r"\\wsl$\Ubuntu\home\alice\proj");
     }
 }

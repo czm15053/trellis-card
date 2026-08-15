@@ -154,6 +154,8 @@ Hook 只需安装一次，即可观察多个项目。若已进入主界面，可
 
 > 说明：Cursor / Pi / OpenCode / DeepSeek Harness 的 hook 是纯观察者，只采集会话与工具活动，不参与权限决策，也不会阻断或修改命令。Pi 通过用户级全局扩展（`~/.pi/agent/extensions/`）、OpenCode 通过用户级全局插件（`~/.config/opencode/plugins/`）、DeepSeek Harness 通过 dsh 插件（`~/.config/trellis-card/agents/dsh-trellis-bridge/`）接入，均无需在项目内放置文件。DeepSeek Harness 的 bridge 需要先安装 dsh（`npm i -g @deepseek-ai/dsh`），安装后重启 DeepSeek Harness 生效。
 
+> **WSL 观察模式**：若你在 Windows 上运行 Trellis Card、但 Agent 在 WSL 内跑 Trellis 项目，可在「设置 → WSL 观察」中选择 WSL 发行版。启用后 Hook 写入 WSL 侧配置（`\\wsl$\<发行版>\...`），项目以 UNC 路径观察。详见 [docs/wsl-support.md](./docs/wsl-support.md)。
+
 ## 操作速查
 
 | 快捷键 | 动作 |

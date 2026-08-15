@@ -1,7 +1,7 @@
 {
   "name": "trellis-card",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Read-only desktop observer for Trellis tasks and Agent activity",
   "scripts": {
     "tauri": "tauri",

@@ -10,6 +10,9 @@ pub struct AppConfig {
     pub dynamic_projects: Vec<String>,
     pub initialized: bool,
     pub always_on_top: bool,
+    /* WSL 观察模式：设为发行版名（如 "Ubuntu"）后，hook 安装写入 WSL 侧配置、
+    hook 事件里的 Linux 项目路径映射为 \\wsl$\<distro>\... 。None = 未启用。 */
+    pub wsl_distro: Option<String>,
 }
 
 pub fn app_config_dir() -> PathBuf {
@@ -99,6 +102,7 @@ mod tests {
             dynamic_projects: vec![],
             initialized: true,
             always_on_top: true,
+            wsl_distro: Some("Ubuntu".into()),
         };
         let s = serde_json::to_string(&cfg).unwrap();
         assert!(s.contains("\"alwaysOnTop\":true"));
@@ -106,6 +110,7 @@ mod tests {
         assert_eq!(back.roots.len(), 2);
         assert!(back.initialized);
         assert!(back.always_on_top);
+        assert_eq!(back.wsl_distro.as_deref(), Some("Ubuntu"));
     }
 
     #[test]
