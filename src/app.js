@@ -4,10 +4,12 @@
    ============================================================ */
 'use strict';
 
-/* 20 visual themes. The native specimen card is included as the baseline;
+/* 22 visual themes. The native specimen card is included as the baseline;
    all other entries are adapted from UI-Prompt style families. */
 const THEME_DEFS = Object.freeze([
   { id: 'specimen', label: '标本卡', family: 'Trellis native', swatch: ['#0e1119', '#f0a35e'] },
+  { id: 'shadcn', label: 'Shadcn 暗色', family: 'shadcn/ui', swatch: ['#09090b', '#e4e4e7'] },
+  { id: 'heroui', label: 'HeroUI 暗色', family: 'HeroUI', swatch: ['#000000', '#006FEE'] },
   { id: 'minimalism', label: '极简主义', family: 'Minimalism', swatch: ['#f5f4ef', '#a66522'] },
   { id: 'swiss', label: '瑞士设计', family: 'Swiss Design', swatch: ['#f7f7f4', '#e2463c'] },
   { id: 'industrial', label: '工业设计', family: 'Industrial', swatch: ['#171b1e', '#d99a45'] },
@@ -109,6 +111,7 @@ const state = {
 let indexedTasks = [];    // 树列表当前可见扁平顺序（数字键 1-9 用，收起子项不计入）
 let treeCollapsed = new Set();  // 已收起父节点的稳定 key（'项目::任务id'），跨渲染保留
 let relCollapsed = new Set();   // 关联看板大任务组的折叠 key（跨渲染保留）
+let relSeenGroups = new Set();  // 已见过的组：归档组首次出现时默认收起
 let lastFocusKey = null;  // 上次渲染的聚焦（切换动画用）
 let entered = false;      // 卡片是否已完成首次进入动画
 
@@ -280,6 +283,7 @@ function showUpdateBanner({ version, notes, url }) {
 
 /* ---------- 本地持久化 ---------- */
 function loadPrefs() {
+  let migratedTheme = false;
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
     if (typeof p.focusKey === 'string') state.focusKey = p.focusKey;
@@ -292,6 +296,11 @@ function loadPrefs() {
     if (typeof p.autoFollowImportant === 'boolean') state.autoFollowImportant = p.autoFollowImportant;
     if (typeof p.showArchived === 'boolean') state.showArchived = p.showArchived;
     if (isThemeId(p.theme)) state.theme = p.theme;
+    /* 本地实验曾把 shadcn 写成默认并写入 prefs；回退到标本卡。显式再选 shadcn 会带 uiRev。 */
+    if ((!p.uiRev || p.uiRev < 1) && p.theme === 'shadcn') {
+      state.theme = 'specimen';
+      migratedTheme = true;
+    }
     /* 各视图缓存窗口高度：card（概要）/ back（详情）/ admin（设置）。数字且>0 才采用。 */
     if (p.winHeights && typeof p.winHeights === 'object') {
       for (const k of ['card', 'back', 'admin']) {
@@ -303,6 +312,7 @@ function loadPrefs() {
   const requestedTheme = new URLSearchParams(location.search).get('theme');
   if (isThemeId(requestedTheme)) state.theme = requestedTheme;
   applyTheme(state.theme, false);
+  if (migratedTheme) savePrefs();
 }
 function savePrefs() {
   try {
@@ -313,6 +323,7 @@ function savePrefs() {
       autoFollowImportant: state.autoFollowImportant, theme: state.theme,
       showArchived: state.showArchived,
       winHeights: state.winHeights,
+      uiRev: 1,
     }));
   } catch { /* localStorage 不可用时静默 */ }
 }
@@ -2316,28 +2327,29 @@ function renderRelations(focused) {
     /* 优先级（P0/P1/P2）：P0/P1 高优先任务更突出 */
     const pri = t.priority || '';
     const priClass = pri === 'P0' ? 'pri-p0' : pri === 'P1' ? 'pri-p1' : '';
+    const done = t.status === 'completed' || t.status === 'done';
+    const showBar = !done && pct > 0;
     /* 规范使用数：任务引用了几个 spec（specRefs）——体现任务与团队规范的关系 */
     const specUsed = (t.specRefs || []).length;
     /* 会话协作：同一任务被多个 AI session 处理（after_finish 语义，跨会话协作） */
     const sessCount = (t.sessions || []).length;
-    return `<button type="button" class="rel-board-card${t.archived ? ' archived' : ''}${active ? ' live' : ''}${priClass ? ' ' + priClass : ''}" data-key="${esc(keyOf(t))}" style="--bc:${statusColor}">
+    const statusText = t.archived ? '已归档' : done ? '待归档' : ((t.phase && t.phase.label) || t.status || '');
+    return `<button type="button" class="rel-board-card${t.archived ? ' archived' : ''}${active ? ' live' : ''}${done ? ' done' : ''}${priClass ? ' ' + priClass : ''}" data-key="${esc(keyOf(t))}" style="--bc:${statusColor}">
       <span class="rel-board-title">${active ? '<span class="live-dot" title="有活跃会话"></span>' : ''}${esc((t.title || t.id).slice(0, 34))}</span>
       <span class="rel-board-linkbtn" data-linkkey="${esc(keyOf(t))}" title="查看此任务的关联">关联</span>
       <span class="rel-board-meta">
-        <span class="rel-board-status">${esc((t.phase && t.phase.label) || t.status || '')}</span>
-        ${pri ? `<span class="rel-board-pri ${priClass}">${esc(pri)}</span>` : ''}
+        <span class="rel-board-status">${esc(statusText)}</span>
+        ${priClass ? `<span class="rel-board-pri ${priClass}">${esc(pri)}</span>` : ''}
         ${state.projects.length > 1 && t.project ? `<span class="rel-board-proj">${esc(t.project)}</span>` : ''}
         ${sessCount > 1 ? `<span class="rel-board-sess" title="${sessCount} 个 AI 会话处理过此任务">${sessCount} 会话</span>` : ''}
         ${specUsed ? `<span class="rel-board-specs" title="引用 ${specUsed} 个规范">${specUsed} 规范</span>` : ''}
         ${t.phase && t.phase.warn ? '<span class="rel-board-warn">需规范</span>' : ''}
         ${editShort ? `<span class="rel-board-file" title="${esc(editing)}">编辑 ${esc(editShort)}</span>` : ''}
-        ${subs.length ? `<span class="rel-board-todo">待办 ${doneN}/${subs.length}</span>` : ''}
-        ${t.devType ? `<span class="rel-board-dev">${esc(devTypeLabel(t.devType))}</span>` : ''}
-        ${t.archived ? '<span class="rel-board-arch">已归档</span>' : ''}
+        ${subs.length && !done ? `<span class="rel-board-todo">${doneN}/${subs.length}</span>` : ''}
         ${relTimeStr ? `<span class="rel-board-time">${esc(relTimeStr)}</span>` : ''}
-        <span class="rel-board-pct">${pct}%</span>
+        ${showBar ? `<span class="rel-board-pct">${pct}%</span>` : ''}
       </span>
-      <span class="rel-board-bar"><i style="width:${pct}%;background:${statusColor}"></i></span>
+      ${showBar ? `<span class="rel-board-bar"><i style="width:${pct}%;background:${statusColor}"></i></span>` : ''}
     </button>`;
   };
 
@@ -2542,14 +2554,19 @@ function renderRelations(focused) {
       }
       for (const g of batchGroups) {
         const gKey = keyOf(g.parent);
-        const collapsed = relCollapsed.has(gKey);
         const pct = Math.round((g.parent.progress || 0) * 100);
-        html += `<div class="rel-board-group">
+        const isDoneGroup = !!(g.parent.archived || g.parent.status === 'completed' || g.parent.status === 'done' || pct >= 100);
+        if (!relSeenGroups.has(gKey)) {
+          relSeenGroups.add(gKey);
+          if (g.parent.archived) relCollapsed.add(gKey);
+        }
+        const collapsed = relCollapsed.has(gKey);
+        html += `<div class="rel-board-group${isDoneGroup ? ' done-group' : ''}">
           <div class="rel-board-group-h rel-board-group-toggle" data-group="${esc(gKey)}" title="展开/收起">
             <span class="rel-board-caret">${collapsed ? '▸' : '▾'}</span>
-            <span class="rel-board-group-dot" style="background:${g.parent.archived ? '#63656e' : '#f0a35e'}"></span>
+            <span class="rel-board-group-dot" style="background:${g.parent.archived ? '#63656e' : isDoneGroup ? '#45c4a0' : '#f0a35e'}"></span>
             <span class="rel-board-group-name" title="${esc(g.parent.title || g.parent.id)}">${esc((g.parent.title || g.parent.id).slice(0, 40))}</span>
-            <span class="rel-board-group-count">${g.kids.length} 子任务 · ${pct}%</span>
+            <span class="rel-board-group-count">${g.kids.length} 子任务${isDoneGroup ? '' : ` · ${pct}%`}</span>
           </div>
           ${collapsed ? '' : `<div class="rel-board-cards">${g.kids.map(card).join('')}</div>`}
         </div>`;
@@ -3758,6 +3775,8 @@ function syncThemeChrome() {
   });
 }
 function renderThemePicker() {
+  const count = $('themeCount');
+  if (count) count.textContent = `${THEME_DEFS.length} styles`;
   const root = $('themeChoices');
   if (!root || root.childElementCount) {
     syncThemeChrome();

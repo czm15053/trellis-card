@@ -709,3 +709,277 @@ body[data-theme] .capsule:not(.is-expanded):not(.menu-open) .cap-state{
   body[data-theme] .capsule>.cap-body{left:4px;right:4px}
   body[data-theme] .cap-project{display:none}
 }
+
+/* ============================================================
+   shadcn/ui 暗色（zinc）
+   去 vibe：反色选中、小圆角、无胶囊、无左色条、无辉光、完成卡不画进度条。
+   chrome 不跟 --accent（任务 kind）走，避免整板被染成琥珀胶囊。
+   ============================================================ */
+body[data-theme="shadcn"]{
+  --ink:#09090b;--ink2:#18181b;--chalk:#fafafa;--mist:#a1a1aa;--dim:#71717a;
+  --line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.12);
+  --amber:#e5b567;--violet:#a78bfa;--mint:#4ade80;--rose:#f87171;--wrap:#fb923c;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+  --serif:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;
+  --theme-card-bg:#09090b;--theme-card-border:rgba(255,255,255,.10);
+  --theme-panel-bg:#18181b;--theme-control-bg:#18181b;
+  --theme-pop-bg:#09090b;--theme-rail-bg:#0c0c0e;--theme-preview-bg:#101012;
+  --theme-sheet-bg:#09090b;
+  --theme-card-shadow:0 8px 24px rgba(0,0,0,.5);
+  --theme-card-highlight:transparent;--theme-card-bottom:transparent;
+  --theme-radius:8px;--theme-block-radius:6px;
+}
+body[data-theme="shadcn"] .card,
+body[data-theme="shadcn"] .setup-card{filter:drop-shadow(0 8px 24px rgba(0,0,0,.5));box-shadow:none}
+body[data-theme="shadcn"] .grab-led,
+body[data-theme="shadcn"] .observe-head .obs-mark,
+body[data-theme="shadcn"] .grab-meter .ticks i.f,
+body[data-theme="shadcn"] .ticks i.f,
+body[data-theme="shadcn"] .seg.f,
+body[data-theme="shadcn"] .grab-meter .ticks i.c,
+body[data-theme="shadcn"] .ticks i.c,
+body[data-theme="shadcn"] .seg.c,
+body[data-theme="shadcn"] .proj-h .d,
+body[data-theme="shadcn"] .node .d,
+body[data-theme="shadcn"] .rel-tnode-dot,
+body[data-theme="shadcn"] .star i{box-shadow:none}
+body[data-theme="shadcn"] .card-grab:hover{background:transparent}
+body[data-theme="shadcn"] .capsule .orb{box-shadow:none}
+body[data-theme="shadcn"] .capsule .orb.check{box-shadow:none}
+body[data-theme="shadcn"] .capsule:not(.is-expanded):not(.menu-open) .cap-state{text-shadow:none}
+body[data-theme="shadcn"] .capsule{box-shadow:0 8px 24px rgba(0,0,0,.5)}
+body[data-theme="shadcn"] .capsule:hover{border-color:var(--line2);box-shadow:0 8px 24px rgba(0,0,0,.5)}
+body[data-theme="shadcn"] .project-pop,
+body[data-theme="shadcn"] .card>.menu-pop,
+body[data-theme="shadcn"] .cap-menu-pop,
+body[data-theme="shadcn"] .card>.theme-pop{
+  background:var(--theme-pop-bg);
+  box-shadow:0 8px 24px rgba(0,0,0,.55);
+  backdrop-filter:none;-webkit-backdrop-filter:none;
+  border-radius:8px;
+}
+body[data-theme="shadcn"] .card{background:var(--theme-card-bg)}
+body[data-theme="shadcn"] .face.back{background:var(--theme-card-bg)}
+body[data-theme="shadcn"] .cap-preview{background:var(--theme-preview-bg)}
+body[data-theme="shadcn"] .excerpt{font-style:normal;color:var(--mist);font-family:var(--font)}
+body[data-theme="shadcn"] .live{color:#86efac;background:color-mix(in srgb,var(--mint) 10%,transparent)}
+body[data-theme="shadcn"] .iconbtn,
+body[data-theme="shadcn"] .proj-chip,
+body[data-theme="shadcn"] .star,
+body[data-theme="shadcn"] .mp-row.setting i{
+  border-radius:6px;backdrop-filter:none;-webkit-backdrop-filter:none;
+}
+body[data-theme="shadcn"] .mini{
+  border-radius:6px;font-weight:500;background:transparent;color:var(--chalk);
+}
+body[data-theme="shadcn"] .mini:hover{background:#27272a;color:var(--chalk)}
+body[data-theme="shadcn"] .sheet{
+  background:var(--theme-sheet-bg);backdrop-filter:none;-webkit-backdrop-filter:none;
+  border-radius:8px 8px 0 0;box-shadow:0 -8px 24px rgba(0,0,0,.4);
+}
+body[data-theme="shadcn"] .sheet::before{display:none}
+body.rel-canvas[data-theme="shadcn"] #relations{border-radius:8px;background:#09090b}
+body[data-theme="shadcn"] .list-h{
+  font-family:var(--font);font-size:13px;font-weight:600;letter-spacing:-.01em;
+  text-transform:none;color:var(--chalk);padding:14px 16px 8px;
+}
+body[data-theme="shadcn"] .lanes-hint{display:none}
+body[data-theme="shadcn"] .lane-chip{
+  border-radius:6px;letter-spacing:0;font-family:var(--font);font-weight:500;
+  background:transparent;border:1px solid transparent;color:var(--mist);
+}
+body[data-theme="shadcn"] .lane-chip:hover{color:var(--chalk);border-color:var(--line2);background:#18181b}
+body[data-theme="shadcn"] .lane-chip.proj-tab{
+  border:1px solid var(--line2);background:transparent;color:var(--mist);
+  font-size:12px;padding:5px 10px;
+}
+body[data-theme="shadcn"] .lane-chip.proj-tab.on{
+  background:#27272a;color:#fafafa;border-color:#3f3f46;
+}
+body[data-theme="shadcn"] .lanes-view{
+  display:inline-flex;flex-wrap:nowrap;width:auto;gap:2px;
+  background:#18181b;border:1px solid var(--line);border-radius:8px;padding:3px;
+}
+body[data-theme="shadcn"] .lane-chip.view-tab{
+  border:0;background:transparent;color:var(--mist);font-size:12px;padding:4px 10px;
+}
+body[data-theme="shadcn"] .lane-chip.view-tab.on{
+  background:#27272a;color:#fafafa;border:0;
+}
+body[data-theme="shadcn"] .rel-board{gap:12px}
+body[data-theme="shadcn"] .rel-board-group{
+  border:1px solid var(--line2);border-radius:8px;background:#18181b;overflow:hidden;
+}
+body[data-theme="shadcn"] .rel-board-group-h{
+  background:#18181b;border-bottom:1px solid var(--line);
+  font-family:var(--font);font-size:13px;font-weight:600;letter-spacing:-.01em;
+  padding:8px 12px;
+}
+body[data-theme="shadcn"] .rel-board-group-toggle:hover{background:#1c1c1f;color:var(--chalk)}
+body[data-theme="shadcn"] .rel-board-group-dot{display:block}
+body[data-theme="shadcn"] .rel-board-group-count,
+body[data-theme="shadcn"] .rel-board-group-pct{font-size:11px;font-family:var(--font);letter-spacing:0}
+body[data-theme="shadcn"] .rel-board-cards{gap:8px;padding:10px 0}
+body[data-theme="shadcn"] .rel-board-card,
+body[data-theme="shadcn"] .rel-board-card.pri-p0,
+body[data-theme="shadcn"] .rel-board-card.pri-p1,
+body[data-theme="shadcn"] .rel-board-card.batch{
+  border:1px solid var(--line2);border-radius:8px;
+  background:#18181b;padding:10px 12px;
+}
+body[data-theme="shadcn"] .rel-board-card:hover{
+  background:#1c1c1f;border-color:rgba(255,255,255,.18);
+}
+body[data-theme="shadcn"] .rel-board-card.live{
+  animation:none;box-shadow:none;
+  border-color:color-mix(in srgb,var(--mint) 40%,var(--line2));
+}
+body[data-theme="shadcn"] .rel-board-title{font-size:13px;font-weight:500;letter-spacing:-.01em;line-height:1.35}
+body[data-theme="shadcn"] .rel-board-status{color:var(--bc,var(--dim));font-size:11px;font-weight:600;font-family:var(--font)}
+body[data-theme="shadcn"] .rel-board-proj,
+body[data-theme="shadcn"] .rel-board-arch,
+body[data-theme="shadcn"] .rel-board-todo,
+body[data-theme="shadcn"] .rel-board-dev,
+body[data-theme="shadcn"] .rel-board-sess,
+body[data-theme="shadcn"] .rel-board-specs,
+body[data-theme="shadcn"] .rel-board-file,
+body[data-theme="shadcn"] .rel-board-time,
+body[data-theme="shadcn"] .rel-board-warn{
+  border:0;background:transparent;padding:0;border-radius:0;color:var(--dim);font-size:11px;
+}
+body[data-theme="shadcn"] .rel-board-pri{border-radius:4px;font-size:10px}
+body[data-theme="shadcn"] .rel-board-bar{height:2px;border-radius:1px;background:rgba(255,255,255,.08)}
+body[data-theme="shadcn"] .rel-board-bar i{border-radius:1px}
+body[data-theme="shadcn"] .rel-board-card.done .rel-board-bar,
+body[data-theme="shadcn"] .rel-board-card.done .rel-board-pct{display:none}
+body[data-theme="shadcn"] .rel-link-chip{border-radius:6px}
+body[data-theme="shadcn"] .rel-link-panel{border-radius:8px;background:#18181b;border-color:var(--line2)}
+body[data-theme="shadcn"] .rel-spec-item{border-radius:8px}
+
+/* ============================================================
+   HeroUI 暗色：primary 蓝选中 + 中圆角 + content 层级，
+   同样去掉胶囊/左色条/辉光，但 chrome 用品牌色而不是反色。
+   ============================================================ */
+body[data-theme="heroui"]{
+  --ink:#000;--ink2:#18181b;--chalk:#eceeef;--mist:#a1a1aa;--dim:#71717a;
+  --line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.14);
+  --amber:#f5a524;--violet:#9353d3;--mint:#17c964;--rose:#f31260;--wrap:#006FEE;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+  --serif:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;
+  --theme-card-bg:#000;--theme-card-border:rgba(255,255,255,.12);
+  --theme-panel-bg:#18181b;--theme-control-bg:#18181b;
+  --theme-pop-bg:#18181b;--theme-rail-bg:#0c0c0e;--theme-preview-bg:#111;
+  --theme-sheet-bg:#000;
+  --theme-card-shadow:0 8px 28px rgba(0,0,0,.55);
+  --theme-card-highlight:transparent;--theme-card-bottom:transparent;
+  --theme-radius:14px;--theme-block-radius:12px;
+  --hero:#006FEE;
+}
+body[data-theme="heroui"] .card,
+body[data-theme="heroui"] .setup-card{filter:drop-shadow(0 8px 28px rgba(0,0,0,.55));box-shadow:none}
+body[data-theme="heroui"] .grab-led,
+body[data-theme="heroui"] .observe-head .obs-mark,
+body[data-theme="heroui"] .grab-meter .ticks i.f,
+body[data-theme="heroui"] .ticks i.f,
+body[data-theme="heroui"] .seg.f,
+body[data-theme="heroui"] .grab-meter .ticks i.c,
+body[data-theme="heroui"] .ticks i.c,
+body[data-theme="heroui"] .seg.c,
+body[data-theme="heroui"] .proj-h .d,
+body[data-theme="heroui"] .node .d,
+body[data-theme="heroui"] .rel-tnode-dot,
+body[data-theme="heroui"] .star i,
+body[data-theme="heroui"] .capsule .orb{box-shadow:none}
+body[data-theme="heroui"] .card-grab:hover{background:transparent}
+body[data-theme="heroui"] .capsule:not(.is-expanded):not(.menu-open) .cap-state{text-shadow:none}
+body[data-theme="heroui"] .project-pop,
+body[data-theme="heroui"] .card>.menu-pop,
+body[data-theme="heroui"] .cap-menu-pop,
+body[data-theme="heroui"] .card>.theme-pop{
+  background:var(--theme-pop-bg);box-shadow:0 12px 32px rgba(0,0,0,.5);
+  backdrop-filter:none;-webkit-backdrop-filter:none;border-radius:12px;
+}
+body[data-theme="heroui"] .excerpt{font-style:normal;color:var(--mist);font-family:var(--font)}
+body[data-theme="heroui"] .iconbtn,
+body[data-theme="heroui"] .proj-chip,
+body[data-theme="heroui"] .star{border-radius:12px;backdrop-filter:none;-webkit-backdrop-filter:none}
+body[data-theme="heroui"] .mini{border-radius:12px;font-weight:500;background:#18181b}
+body[data-theme="heroui"] .mini:hover{background:#27272a;color:var(--chalk)}
+body[data-theme="heroui"] .sheet{
+  background:var(--theme-sheet-bg);backdrop-filter:none;-webkit-backdrop-filter:none;
+  border-radius:14px 14px 0 0;box-shadow:0 -8px 28px rgba(0,0,0,.45);
+}
+body[data-theme="heroui"] .sheet::before{display:none}
+body.rel-canvas[data-theme="heroui"] #relations{border-radius:14px;background:#000}
+body[data-theme="heroui"] .list-h{
+  font-family:var(--font);font-size:14px;font-weight:600;letter-spacing:0;
+  text-transform:none;color:var(--chalk);padding:14px 16px 8px;
+}
+body[data-theme="heroui"] .lanes-hint{display:none}
+body[data-theme="heroui"] .lane-chip{
+  border-radius:12px;letter-spacing:0;font-family:var(--font);font-weight:500;
+  background:#18181b;border:1px solid transparent;color:var(--mist);
+}
+body[data-theme="heroui"] .lane-chip:hover{color:var(--chalk);background:#27272a}
+body[data-theme="heroui"] .lane-chip.proj-tab{
+  font-size:12px;padding:6px 12px;background:#18181b;color:var(--mist);
+}
+body[data-theme="heroui"] .lane-chip.proj-tab.on{
+  background:var(--hero);color:#fff;border-color:var(--hero);
+}
+body[data-theme="heroui"] .lanes-view{
+  display:inline-flex;flex-wrap:nowrap;width:auto;gap:4px;
+  background:#18181b;border-radius:14px;padding:4px;
+}
+body[data-theme="heroui"] .lane-chip.view-tab{
+  border:0;background:transparent;color:var(--mist);font-size:12px;padding:5px 12px;
+}
+body[data-theme="heroui"] .lane-chip.view-tab.on{
+  background:var(--hero);color:#fff;border:0;
+}
+body[data-theme="heroui"] .rel-board{gap:12px}
+body[data-theme="heroui"] .rel-board-group{
+  border:1px solid var(--line);border-radius:14px;background:#18181b;overflow:hidden;
+}
+body[data-theme="heroui"] .rel-board-group-h{
+  background:transparent;border-bottom:1px solid var(--line);
+  font-family:var(--font);font-size:13px;font-weight:600;padding:12px 14px;
+}
+body[data-theme="heroui"] .rel-board-group-dot{
+  width:8px;height:8px;border-radius:50%;background:var(--hero);
+}
+body[data-theme="heroui"] .rel-board-cards{gap:10px;padding:12px}
+body[data-theme="heroui"] .rel-board-card,
+body[data-theme="heroui"] .rel-board-card.pri-p0,
+body[data-theme="heroui"] .rel-board-card.pri-p1,
+body[data-theme="heroui"] .rel-board-card.batch{
+  border:1px solid var(--line2);border-radius:12px;
+  background:#000;padding:12px 14px;
+}
+body[data-theme="heroui"] .rel-board-card:hover{
+  background:#0c0c0e;border-color:color-mix(in srgb,var(--hero) 40%,var(--line2));
+}
+body[data-theme="heroui"] .rel-board-card.live{
+  animation:none;box-shadow:0 0 0 1px color-mix(in srgb,var(--mint) 45%,transparent);
+}
+body[data-theme="heroui"] .rel-board-title{font-size:13px;font-weight:600;line-height:1.35}
+body[data-theme="heroui"] .rel-board-status{color:var(--bc,var(--dim));font-size:11px;font-weight:600;font-family:var(--font)}
+body[data-theme="heroui"] .rel-board-proj,
+body[data-theme="heroui"] .rel-board-arch,
+body[data-theme="heroui"] .rel-board-todo,
+body[data-theme="heroui"] .rel-board-dev,
+body[data-theme="heroui"] .rel-board-sess,
+body[data-theme="heroui"] .rel-board-specs,
+body[data-theme="heroui"] .rel-board-file,
+body[data-theme="heroui"] .rel-board-time{
+  border:0;background:transparent;padding:0;color:var(--dim);font-size:11px;
+}
+body[data-theme="heroui"] .rel-board-pri{border-radius:8px}
+body[data-theme="heroui"] .rel-board-bar{height:4px;border-radius:99px;background:rgba(255,255,255,.08)}
+body[data-theme="heroui"] .rel-board-card.done .rel-board-bar,
+body[data-theme="heroui"] .rel-board-card.done .rel-board-pct{display:none}
+body[data-theme="heroui"] .rel-link-chip{border-radius:12px}
+body[data-theme="heroui"] .rel-link-panel{border-radius:14px;background:#18181b;border-color:var(--line2)}
+body[data-theme="heroui"] .rel-spec-item{border-radius:12px}
