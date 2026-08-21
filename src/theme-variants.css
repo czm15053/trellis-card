@@ -5,7 +5,7 @@
 body[data-theme] {
   --theme-card-bg: #0e1119;
   --theme-card-border: var(--line2);
-  --theme-card-shadow: 0 30px 60px rgba(0,0,0,.55), 0 0 90px color-mix(in srgb,var(--accent,var(--amber)) 11%,transparent);
+  --theme-card-shadow: 0 14px 32px rgba(0,0,0,.48);
   --theme-panel-bg: rgba(255,255,255,.025);
   --theme-control-bg: rgba(15,17,25,.72);
   --theme-pop-bg: #121722;
@@ -92,7 +92,7 @@ body[data-theme="specimen"]{
   --theme-card-bg:#0e1119;--theme-card-border:rgba(236,234,226,.13);
   --theme-panel-bg:rgba(255,255,255,.025);--theme-control-bg:rgba(15,17,25,.72);
   --theme-pop-bg:#121722;--theme-rail-bg:#0d0f15;--theme-preview-bg:#10131b;
-  --theme-card-shadow:0 30px 60px rgba(0,0,0,.55),0 0 90px color-mix(in srgb,var(--accent) 11%,transparent);
+  --theme-card-shadow:0 14px 32px rgba(0,0,0,.48);
   --theme-card-highlight:radial-gradient(ellipse at 50% 0%,color-mix(in srgb,var(--accent) 26%,transparent),transparent 70%);
   --theme-card-bottom:radial-gradient(ellipse at 50% 100%,color-mix(in srgb,var(--accent) 22%,transparent),transparent 72%);
   --theme-radius:22px;--theme-block-radius:10px
@@ -586,31 +586,41 @@ body[data-theme] .cap-preview-excerpt h4{font-size:12px;font-weight:700;margin:0
 body[data-theme] .cap-preview-excerpt code{font-family:var(--mono);font-size:11px;background:rgba(255,255,255,.06);border-radius:3px;padding:0 3px}
 body[data-theme] .cap-preview-excerpt a{color:color-mix(in srgb,var(--accent) 70%,#fff)}
 
-/* 流光边框：仅 working 状态激活，沿岛面边界做 conic 渐变流动。
-   用独立伪层，避免覆盖 ::before/::after 的岛面本体与顶部高光。 */
+/* 流光边框：仅 working 状态激活。mask 环静止，conic 在 ::before 上 rotate（合成层），
+   避免每帧改 @property / 重栅格化渐变。 */
 body[data-theme] .capsule .cap-glow{
   display:none;position:absolute;top:0;left:0;right:0;height:40px;z-index:0;
-  border-radius:999px;pointer-events:none;
-  background:conic-gradient(from var(--glow-angle,0deg) at 50% 50%,
+  border-radius:999px;pointer-events:none;overflow:hidden;
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;
+  padding:1px;
+  opacity:0;transition:opacity .3s var(--ease)
+}
+body[data-theme] .capsule .cap-glow::before{
+  content:"";position:absolute;left:50%;top:50%;width:200%;aspect-ratio:1;
+  transform:translate(-50%,-50%);
+  background:conic-gradient(from 0deg at 50% 50%,
     transparent 0deg,
     color-mix(in srgb,var(--accent) 68%,transparent) 60deg,
     transparent 130deg,
     transparent 230deg,
     color-mix(in srgb,var(--accent) 30%,transparent) 300deg,
     transparent 360deg);
-  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
-  -webkit-mask-composite:xor;mask-composite:exclude;
-  padding:1px;
-  opacity:0;transition:opacity .3s var(--ease)
 }
 body[data-theme] .capsule[data-runtime-state="working"] .cap-glow{
-  display:block;opacity:.7;animation:capGlowSpin 3.2s linear infinite
+  display:block;opacity:.7
+}
+body[data-theme] .capsule[data-runtime-state="working"] .cap-glow::before{
+  animation:capGlowSpin 3.2s linear infinite
 }
 body[data-theme] .capsule.is-expanded .cap-glow,
 body[data-theme] .capsule.menu-open .cap-glow{height:134px;border-radius:18px}
-@property --glow-angle{syntax:"<angle>";initial-value:0deg;inherits:false}
-@keyframes capGlowSpin{to{--glow-angle:360deg}}
-body[data-theme] .capsule.pulse .cap-glow{opacity:1;animation:capGlowSpin 1.2s linear infinite}
+@keyframes capGlowSpin{
+  from{transform:translate(-50%,-50%) rotate(0deg)}
+  to{transform:translate(-50%,-50%) rotate(360deg)}
+}
+body[data-theme] .capsule.pulse .cap-glow{opacity:1}
+body[data-theme] .capsule.pulse .cap-glow::before{animation:capGlowSpin 1.2s linear infinite}
 
 /* 展开 bloom：岛面一次性光晕扩散（FocuSD glassBloomExpand 轻量版） */
 @keyframes islandBloom{
@@ -674,8 +684,8 @@ body[data-theme] .capsule.menu-open>.cap-body,
 body[data-theme] .capsule.menu-open>.cap-top{transition:opacity .25s var(--ease)}
 
 @keyframes islandSignalBreathe{
-  0%,100%{opacity:.72;box-shadow:0 0 7px color-mix(in srgb,var(--accent) 52%,transparent)}
-  50%{opacity:1;box-shadow:0 0 13px color-mix(in srgb,var(--accent) 88%,transparent)}
+  0%,100%{opacity:.72}
+  50%{opacity:1}
 }
 body[data-theme] .capsule .orb{
   width:9px;height:9px;flex:none;
@@ -700,7 +710,9 @@ body[data-theme] .capsule:not(.is-expanded):not(.menu-open) .cap-state{
   body[data-theme] .capsule>.cap-top,
   body[data-theme] .cap-preview{transition:none}
   body[data-theme] .capsule .orb{animation:none!important}
-  body[data-theme] .capsule .cap-glow{animation:none!important;opacity:.5}
+  body[data-theme] .capsule .cap-glow,
+  body[data-theme] .capsule .cap-glow::before{animation:none!important}
+  body[data-theme] .capsule .cap-glow{opacity:.5}
   body[data-theme] .capsule.is-expanded::before{animation:none!important}
 }
 @media (max-width:320px){
@@ -730,8 +742,7 @@ body[data-theme="shadcn"]{
   --theme-card-highlight:transparent;--theme-card-bottom:transparent;
   --theme-radius:8px;--theme-block-radius:6px;
 }
-body[data-theme="shadcn"] .card,
-body[data-theme="shadcn"] .setup-card{filter:drop-shadow(0 8px 24px rgba(0,0,0,.5));box-shadow:none}
+body[data-theme="shadcn"] .setup-card{filter:none;box-shadow:var(--theme-card-shadow)}
 body[data-theme="shadcn"] .grab-led,
 body[data-theme="shadcn"] .observe-head .obs-mark,
 body[data-theme="shadcn"] .grab-meter .ticks i.f,
@@ -877,8 +888,7 @@ body[data-theme="heroui"]{
   --theme-radius:14px;--theme-block-radius:12px;
   --hero:#006FEE;
 }
-body[data-theme="heroui"] .card,
-body[data-theme="heroui"] .setup-card{filter:drop-shadow(0 8px 28px rgba(0,0,0,.55));box-shadow:none}
+body[data-theme="heroui"] .setup-card{filter:none;box-shadow:var(--theme-card-shadow)}
 body[data-theme="heroui"] .grab-led,
 body[data-theme="heroui"] .observe-head .obs-mark,
 body[data-theme="heroui"] .grab-meter .ticks i.f,

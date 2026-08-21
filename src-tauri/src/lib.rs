@@ -79,7 +79,8 @@ struct ConfigOut {
     roots: Vec<String>,
     always_on_top: bool,
     configured: bool,
-    /* WSL 观察模式：当前配置的发行版名（None = 未启用） */
+    /* WSL 观察仅 Windows。非 Windows 恒为 false / None，前端不渲染该段。 */
+    wsl_supported: bool,
     wsl_distro: Option<String>,
 }
 
@@ -721,7 +722,12 @@ fn get_config(state: State<AppState>) -> ConfigOut {
         configured: cfg.initialized || !cfg.roots.is_empty() || !cfg.dynamic_projects.is_empty(),
         roots: cfg.roots.clone(),
         always_on_top: cfg.always_on_top,
-        wsl_distro: cfg.wsl_distro.clone(),
+        wsl_supported: cfg!(windows),
+        wsl_distro: if cfg!(windows) {
+            cfg.wsl_distro.clone()
+        } else {
+            None
+        },
     }
 }
 
@@ -729,14 +735,23 @@ fn get_config(state: State<AppState>) -> ConfigOut {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WslInfo {
+    supported: bool,
     distros: Vec<String>,
     current: Option<String>,
 }
 
 #[tauri::command]
 fn get_wsl_info(state: State<AppState>) -> WslInfo {
+    if !cfg!(windows) {
+        return WslInfo {
+            supported: false,
+            distros: Vec::new(),
+            current: None,
+        };
+    }
     let current = state.config.lock().unwrap().wsl_distro.clone();
     WslInfo {
+        supported: true,
         distros: crate::platform::detect_wsl_distros(),
         current,
     }
@@ -744,6 +759,9 @@ fn get_wsl_info(state: State<AppState>) -> WslInfo {
 
 #[tauri::command]
 fn set_wsl_distro(state: State<AppState>, distro: Option<String>) -> Result<(), String> {
+    if !cfg!(windows) {
+        return Err("WSL 观察仅支持 Windows".into());
+    }
     let distro = distro
         .filter(|d| !d.trim().is_empty())
         .map(|d| d.trim().to_string());
@@ -1215,7 +1233,12 @@ fn set_always_on_top(app: AppHandle, state: State<AppState>, flag: bool) -> Resu
 }
 
 #[tauri::command]
-fn set_window_mode(app: AppHandle, mode: String) -> Result<(), String> {
+fn set_window_mode(
+    app: AppHandle,
+    mode: String,
+    width: Option<f64>,
+    height: Option<f64>,
+) -> Result<(), String> {
     let window = app.get_webview_window("main").ok_or("窗口不存在")?;
     let position = window.outer_position().ok();
     if mode == "capsule" {
@@ -1225,10 +1248,12 @@ fn set_window_mode(app: AppHandle, mode: String) -> Result<(), String> {
             .set_size(tauri::LogicalSize::new(360.0, 40.0))
             .map_err(|e| e.to_string())?;
     } else {
-        /* card 模式：恢复可拉伸，设初始尺寸，用户可自由调整。 */
+        /* card 模式：恢复可拉伸。宽高用前端缓存（手拉/关联往返），缺省 380×640。 */
         let _ = window.set_resizable(true);
+        let w = width.unwrap_or(380.0).clamp(320.0, 2000.0);
+        let h = fit_target_height(height.unwrap_or(640.0));
         window
-            .set_size(tauri::LogicalSize::new(380.0, 640.0))
+            .set_size(tauri::LogicalSize::new(w, h))
             .map_err(|e| e.to_string())?;
     }
     if let Some(position) = position {
@@ -1246,9 +1271,6 @@ fn set_window_size(app: AppHandle, width: f64, height: f64) -> Result<(), String
         let _ = window.set_resizable(true);
     }
     if let Err(e) = window.set_size(tauri::LogicalSize::new(width, height)) {
-        if !cfg!(windows) {
-            let _ = window.set_resizable(false);
-        }
         return Err(e.to_string());
     }
     if let Some(position) = position {
@@ -1270,14 +1292,7 @@ fn set_window_size(app: AppHandle, width: f64, height: f64) -> Result<(), String
             .set_position(tauri::LogicalPosition::new(x_logical, y_logical))
             .map_err(|e| e.to_string())?;
     }
-    /* macOS 延迟恢复不可调整状态 */
-    let delayed = window.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(180));
-        if !cfg!(windows) {
-            let _ = delayed.set_resizable(false);
-        }
-    });
+    /* 卡片/关联画布保持可拉伸。胶囊走 set_window_mode / set_capsule_expanded，不经过这里。 */
     Ok(())
 }
 

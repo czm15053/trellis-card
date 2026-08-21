@@ -88,7 +88,7 @@ const state = {
   hookStatusRequested: false,
   hookStatusError: null,
   hookUpdatingAgent: null,
-  wslInfo: { distros: [], current: null },   // WSL 观察模式：可用发行版 + 当前配置
+  wslInfo: { supported: false, distros: [], current: null },   // WSL 观察：仅 Windows
   wslLoading: false,
   setupBusy: false,
   menuOpen: false,
@@ -101,6 +101,7 @@ const state = {
   theme: isThemeId(document.body.dataset.theme) ? document.body.dataset.theme : 'specimen',
   showArchived: false,    // 是否显示已归档任务（用于树列表过滤）
   winHeights: { card: null, back: null, admin: null }, // 各视图缓存窗口高度（切视图秒切，不重测量）
+  winWidths: { card: null, back: null, admin: null },  // 同上，关关联/切胶囊时恢复宽度
   relOpen: false,         // 任务关联 sheet 是否展开
   relationsByProject: {}, // projectName -> list_relations 结果 { tasks, specGroups, prdGroups }
   relLane: 'all',         // 泳道过滤：all | frontend | backend | test | docs
@@ -308,6 +309,12 @@ function loadPrefs() {
         if (typeof v === 'number' && v >= 160) state.winHeights[k] = v;
       }
     }
+    if (p.winWidths && typeof p.winWidths === 'object') {
+      for (const k of ['card', 'back', 'admin']) {
+        const v = p.winWidths[k];
+        if (typeof v === 'number' && v >= 320) state.winWidths[k] = v;
+      }
+    }
   } catch { /* 忽略损坏的本地数据 */ }
   const requestedTheme = new URLSearchParams(location.search).get('theme');
   if (isThemeId(requestedTheme)) state.theme = requestedTheme;
@@ -323,6 +330,7 @@ function savePrefs() {
       autoFollowImportant: state.autoFollowImportant, theme: state.theme,
       showArchived: state.showArchived,
       winHeights: state.winHeights,
+      winWidths: state.winWidths,
       uiRev: 1,
     }));
   } catch { /* localStorage 不可用时静默 */ }
@@ -1536,6 +1544,7 @@ function renderCard(t, projectActivity) {
         state.subOpen = state.subOpen === fKey ? null : fKey;
         box.classList.toggle('open', state.subOpen === fKey);
         box.querySelector('.hint').textContent = state.subOpen === fKey ? '收起' : '清单';
+        scheduleWindowFit();
       };
       box.onclick = toggle;
       box.onkeydown = (e) => {
@@ -1588,36 +1597,54 @@ function renderCard(t, projectActivity) {
 }
 
 /* ---------- 翻面 ---------- */
+function viewFitKey() {
+  return state.flipped ? 'back' : (state.adminOpen ? 'admin' : 'card');
+}
+/* 手拉标记按视图隔离：拉伸详情页不应阻止概要页按内容收缩。 */
+const userResizedByView = { card: false, back: false, admin: false };
+function isUserResized(key) {
+  return !!userResizedByView[key || viewFitKey()];
+}
+function syncUserResizedClass() {
+  document.body.classList.toggle('user-resized', document.body.classList.contains('fit') && isUserResized());
+}
+function markUserResized(on) {
+  userResizedByView[viewFitKey()] = !!on;
+  syncUserResizedClass();
+}
 /* 高度自适应只在正面生效；翻面必须移除 fit，否则 .face.back 被 display:none */
 function syncFit() {
   /* fit 模式下 world 高度为 auto，让窗口跟随内容高度。
      设置面板（adminOpen）也参与自适应：内容高于当前窗口时拉伸窗口，
      而不是在固定窗口内内部滚动。翻面 / 任务树仍保持固定窗口几何。 */
-  /* relOpen 参与 fit：让 body/world 高度跟随内容（world=auto），避免 body 固定在
-     viewport 高度导致 world 下方留大片透明空白；窗口实际高度由 scheduleWindowFit
-     的 relOpen 分支单独算（内容高度）。与 adminOpen 的 fit 处理一致。 */
-  /* rel-canvas（关联大画布）：world 保持窗口满高（不 fit），sheet 用 CSS 铺满；
-     relOpen 非画布模式才参与 fit（world 跟随内容）。 */
+  /* rel-canvas（关联大画布）：world 保持窗口满高（不 fit），sheet 用 CSS 铺满。 */
   const fit = state.mode === 'card' && !state.flipped && !state.treeOpen && !document.body.classList.contains('rel-canvas');
   document.body.classList.toggle('fit', fit);
-  /* fit 退出时清掉上一次写入的显式舞台高度，避免任务树 / 详情页继承正面卡片尺寸。 */
+  /* fit 退出时清掉上一次写入的显式舞台高度，避免任务树 / 详情页继承正面卡片尺寸。
+     不重置各视图手拉标记：切回后仍尊重该视图自己的高度。 */
   if (!fit) {
     const world = $('world');
     if (world) {
       world.style.height = '';
       world.style.maxHeight = '';
     }
-    /* 退出 fit（切胶囊/翻面/任务树）后重置「用户拉伸」标记，回到默认自适应。 */
-    userResized = false;
-    document.body.classList.remove('user-resized');
   }
+  syncUserResizedClass();
   scheduleWindowFit();
 }
 /* 渲染稳定后一次性把窗口高度对齐到内容高度：防抖 + 阈值，避免连续 set_size 打死 WKWebView */
 let fitWinTimer = null;
 const IDLE_WINDOW_HEIGHT = 400;
+const REL_CANVAS_W = 940;
+const REL_CANVAS_H = 900;
+const REL_NORMAL_W = 380;
+const REL_NORMAL_H = 640;
+function relationsCanvasOpen() {
+  return !!state.relOpen || document.body.classList.contains('rel-canvas');
+}
 function scheduleWindowFit() {
-  if (state.mode !== 'card' || state.view !== 'main' || state.treeOpen) {
+  /* 关联画布是离散尺寸（940×900），绝不能走卡片内容 fit，否则会把画布收成卡片高度。 */
+  if (state.mode !== 'card' || state.view !== 'main' || state.treeOpen || relationsCanvasOpen()) {
     clearTimeout(fitWinTimer);
     fitWinTimer = null;
     return;
@@ -1627,12 +1654,12 @@ function scheduleWindowFit() {
     /* 缓存优先：当前视图有缓存高度且未手动拉伸时，直接用缓存 set_size（秒切），
        不做实际测量 —— 详情页/概要页切换丝滑。缓存可能在内容变化后过时，
        因此秒切后再走一次测量分支更新缓存（见下），保证后续高度准确。 */
-    const viewKey = state.flipped ? 'back' : (state.adminOpen ? 'admin' : 'card');
+    const viewKey = viewFitKey();
     const cached = state.winHeights[viewKey];
     const world = $('world'), card = $('card');
     if (!world || !card) return;
     let usedCached = false;
-    if (cached && !userResized && !fitInFlight && cached > 0) {
+    if (cached && !isUserResized(viewKey) && !fitInFlight && cached > 0) {
       usedCached = true;
       world.style.height = `${cached}px`;
       world.style.maxHeight = `${cached}px`;
@@ -1673,27 +1700,6 @@ function scheduleWindowFit() {
         Math.max(IDLE_WINDOW_HEIGHT, Math.ceil(panelHeight) + 4),
         Math.floor(screen.availHeight * 0.92),
       );
-    } else if (state.relOpen) {
-      /* 关联大画布：窗口已放大，world 保持窗口满高，不在此处对齐内容。 */
-      if (document.body.classList.contains('rel-canvas')) {
-        world.style.height = '';
-        world.style.maxHeight = '';
-        return;
-      }
-      /* 关联视图：sheet 是绝对定位浮层（bottom:0），高度限制在窗口内（CSS max-height），
-         body 内部滚动。窗口只需对齐到「sheet 高度 + 上方区域」，无需让 sheet 无限高。 */
-      const rel = $('relations');
-      const body = $('relationsBody');
-      if (!rel || !body) { world.style.maxHeight = ''; return; }
-      /* 不设 inline max-height：sheet 用 CSS max-height（窗口内），body 内部滚动 */
-      const sheetTop = rel.getBoundingClientRect().top;
-      const cardTop = card.getBoundingClientRect().top;
-      const aboveSheet = Math.max(0, sheetTop - cardTop);
-      const sheetH = rel.getBoundingClientRect().height;
-      h = Math.min(
-        Math.max(IDLE_WINDOW_HEIGHT, Math.ceil(aboveSheet + sheetH) + 8),
-        Math.floor(screen.availHeight * 0.92),
-      );
     } else {
       const bottom = card.getBoundingClientRect().bottom;
       h = Math.ceil(bottom - world.getBoundingClientRect().top) + 4; /* 舞台无 padding，只留边框取整余量 */
@@ -1709,10 +1715,9 @@ function scheduleWindowFit() {
     h = Math.max(160, Math.ceil(h));
     /* 实际测量完成：更新当前视图缓存（下次切回直接秒切）。仅在未手动拉伸时更新，
        避免覆盖用户手动调整的高度。 */
-    if (!userResized) {
-      const k = state.flipped ? 'back' : (state.adminOpen ? 'admin' : 'card');
-      if (state.winHeights[k] !== h) {
-        state.winHeights[k] = h;
+    if (!isUserResized(viewKey)) {
+      if (state.winHeights[viewKey] !== h) {
+        state.winHeights[viewKey] = h;
         savePrefs();
       }
     }
@@ -1720,7 +1725,7 @@ function scheduleWindowFit() {
     fitPendingHeight = target;
     /* 用户手动拉伸过窗口：内容放得下时舞台跟随窗口（不锁内容高度），拉伸跟手。
        CSS body.fit.user-resized .world{height:100%} 负责舞台铺满。 */
-    if (userResized) {
+    if (isUserResized(viewKey)) {
       if (target <= window.innerHeight + FIT_DEADZONE) {
         world.style.height = '';
         world.style.maxHeight = '';
@@ -1761,19 +1766,51 @@ function scheduleWindowFit() {
 let fitPendingHeight = 0;
 let fitInFlight = false;
 let fitLastSent = 0;
-let userResized = false;
-/* fit 触发的 set_size 生效截止时间：期间到达的 resize 不算「用户拉伸」（fit 缩放是异步的，
-   resize 事件可能在 fitInFlight=false 后才到，需时间窗口区分）。 */
+/* fit / set_window_size 生效截止时间：期间到达的 resize 不算「用户拉伸」。 */
 let fitActiveUntil = 0;
 const FIT_ACTIVE_WINDOW_MS = 800;
 const FIT_DEADZONE = 15;
+function beginProgrammaticResize() {
+  fitActiveUntil = Date.now() + FIT_ACTIVE_WINDOW_MS;
+}
+let fitGen = 0;
+function cancelWindowFit() {
+  clearTimeout(fitWinTimer);
+  fitWinTimer = null;
+  fitPendingHeight = 0;
+  fitInFlight = false;
+  fitGen += 1;
+  beginProgrammaticResize();
+}
+function snapshotCardHeight() {
+  const h = Math.round(window.innerHeight);
+  const w = Math.round(window.innerWidth);
+  if (Number.isFinite(h) && h >= 160) state.winHeights.card = h;
+  if (Number.isFinite(w) && w >= 320) state.winWidths.card = w;
+  savePrefs();
+}
+function cardRestoreHeight() {
+  const cached = Number(state.winHeights.card);
+  return Math.max(160, cached > 0 ? cached : REL_NORMAL_H);
+}
+function cardRestoreWidth() {
+  const cached = Number(state.winWidths.card);
+  return Math.max(320, cached > 0 ? cached : REL_NORMAL_W);
+}
+function restoreCardWindowSize() {
+  if (!hasTauri) return Promise.resolve();
+  beginProgrammaticResize();
+  return call('set_window_size', { width: cardRestoreWidth(), height: cardRestoreHeight() }).catch(() => {});
+}
 function sendFitWindow(h) {
+  const gen = ++fitGen;
   fitLastSent = h;
   fitInFlight = true;
-  fitActiveUntil = Date.now() + FIT_ACTIVE_WINDOW_MS;
+  beginProgrammaticResize();
   call('fit_window_height', { height: h })
     .catch((error) => console.error('[fit_window_height]', error))
     .finally(() => {
+      if (gen !== fitGen) return;
       fitInFlight = false;
       /* 在途期间若目标又变了，补发一次（死区过滤已保证不会形成高频回环） */
       if (fitPendingHeight !== 0 && Math.abs(fitPendingHeight - fitLastSent) > FIT_DEADZONE) {
@@ -1839,11 +1876,6 @@ async function toggleFlip(force) {
   if (target === state.flipped) return;
   state.flipped = target;
   if (!target) state.evidenceTarget = null;   /* 返回正面时清除临时 evidence 展示 */
-  /* 翻面回来（概要页）：重置「用户拉伸」标记，确保 fit 能收缩窗口到概要页高度。 */
-  if (!target) {
-    userResized = false;
-    document.body.classList.remove('user-resized');
-  }
   applyFlipCard();
   if (target) await loadBack(t);
   /* 翻面动画（.flip 过渡约 0.68s）完成后，背面内容已稳定；延迟重新 fit 窗口高度，
@@ -2628,6 +2660,24 @@ function renderRelations(focused) {
   body.innerHTML = html;
   $('relationsCount').textContent = String(relCount);
 
+  /* 规范网格：同一行的卡片一起展开/收起，避免左边打开后右边留一块空行。 */
+  body.querySelectorAll('.rel-spec-grid').forEach(grid => {
+    grid.querySelectorAll(':scope > .rel-spec-item').forEach(item => {
+      item.addEventListener('toggle', () => {
+        if (item.dataset.syncing) return;
+        const top = Math.round(item.getBoundingClientRect().top);
+        const row = [...grid.querySelectorAll(':scope > .rel-spec-item')]
+          .filter(el => Math.abs(Math.round(el.getBoundingClientRect().top) - top) <= 4);
+        for (const el of row) {
+          if (el === item || el.open === item.open) continue;
+          el.dataset.syncing = '1';
+          el.open = item.open;
+          delete el.dataset.syncing;
+        }
+      });
+    });
+  });
+
   /* 看板卡片点击：聚焦该任务（显示卡片） */
   body.querySelectorAll('.rel-board-card').forEach(cardEl => {
     cardEl.onclick = () => {
@@ -2712,13 +2762,13 @@ function focusTask(t) {
   state.focusLockUntil = 0;
   clearRuntimeUnread();
   state.treeOpen = false;
-  state.relOpen = false;
   state.subOpen = null;
-  /* 若从关联画布聚焦：移除画布态并恢复窄窗，让卡片显示聚焦任务 */
-  if (document.body.classList.contains('rel-canvas')) {
-    document.body.classList.remove('rel-canvas');
-    if (hasTauri) call('set_window_size', { width: REL_NORMAL_W, height: REL_NORMAL_H }).catch(() => {});
+  /* 从关联画布点任务：恢复进入前的高度，不要再跑内容 fit 把窗口收短。 */
+  if (state.relOpen || document.body.classList.contains('rel-canvas')) {
+    leaveRelationsCanvas();
+    return;
   }
+  state.relOpen = false;
   render();
 }
 /* 显式解除锁定：停止手动模式，回到策略决定焦点 */
@@ -3044,7 +3094,13 @@ async function setMode(mode) {
   modeTransitioning = true;
   try {
     await capsuleWindowResizeChain;
-    await call('set_window_mode', { mode });
+    beginProgrammaticResize();
+    const modeArgs = { mode };
+    if (mode === 'card') {
+      modeArgs.width = cardRestoreWidth();
+      modeArgs.height = cardRestoreHeight();
+    }
+    await call('set_window_mode', modeArgs);
     state.mode = mode;
     lastCapsuleWindowExpanded = null;
     if (mode === 'capsule') {
@@ -3053,6 +3109,8 @@ async function setMode(mode) {
       state.treeOpen = false;
       state.relOpen = false;
       state.adminOpen = false;
+      document.body.classList.remove('rel-canvas');
+      cancelWindowFit();
       const mp = $('menuPop');
       if (mp) mp.hidden = true;
       toggleCapMenu(false);
@@ -3099,14 +3157,21 @@ function hookStatusTone(agent) {
   const status = hookStatus(agent);
   return status && status.installed ? 'installed' : 'missing';
 }
-/* ---------- WSL 观察模式 ---------- */
+/* ---------- WSL 观察模式（仅 Windows；macOS / Linux 不加载、不展示） ---------- */
+function wslObserveSupported() {
+  return !!state.wslInfo.supported;
+}
 async function loadWslInfo() {
-  if (state.wslLoading) return;
+  if (!wslObserveSupported() || state.wslLoading) return;
   state.wslLoading = true;
   try {
     const info = await call('get_wsl_info');
     if (info && Array.isArray(info.distros)) {
-      state.wslInfo = { distros: info.distros, current: info.current || null };
+      state.wslInfo = {
+        supported: info.supported !== false,
+        distros: info.distros,
+        current: info.current || null,
+      };
     }
   } catch (e) {
     console.error('[invoke:get_wsl_info]', e);
@@ -3116,6 +3181,7 @@ async function loadWslInfo() {
   }
 }
 async function setWslDistro(distro) {
+  if (!wslObserveSupported()) return;
   state.wslLoading = true;
   render();
   try {
@@ -3134,6 +3200,7 @@ async function setWslDistro(distro) {
   }
 }
 function renderWslSection(body) {
+  if (!wslObserveSupported()) return;
   body.appendChild(secTitle('WSL 观察'));
   const guide = document.createElement('div');
   guide.className = 'hook-guide';
@@ -3458,11 +3525,6 @@ function closeAdmin() {
   render();
   restoreFocus();
 }
-/* 关联画布大展开尺寸：突破 380×640 窄窗，接近全屏展示批次树 */
-const REL_CANVAS_W = 940;
-const REL_CANVAS_H = 900;
-const REL_NORMAL_W = 380;
-const REL_NORMAL_H = 640;
 function toggleRelations() {
   const opening = !state.relOpen;
   if (opening) {
@@ -3473,27 +3535,35 @@ function toggleRelations() {
     state.adminOpen = false;
     state.flipped = false;
     state.evidenceTarget = null;
+    /* 先记下当前卡片高度，再放大；否则关画布时会落到过期/被 fit 改写的缓存。 */
+    snapshotCardHeight();
+    cancelWindowFit();
     state.relOpen = true;
     focusReturnTo = $('btnRelations');
-    /* 关联画布：窗口临时放大展示批次树，关闭时恢复窄窗 */
-    if (hasTauri) call('set_window_size', { width: REL_CANVAS_W, height: REL_CANVAS_H }).catch(() => {});
+    if (hasTauri) {
+      beginProgrammaticResize();
+      call('set_window_size', { width: REL_CANVAS_W, height: REL_CANVAS_H }).catch(() => {});
+    }
     document.body.classList.add('rel-canvas');
     render();
     setTimeout(() => moveFocusInto($('relations')), 50);
   } else {
-    state.relOpen = false;
-    document.body.classList.remove('rel-canvas');
-    if (hasTauri) call('set_window_size', { width: REL_NORMAL_W, height: REL_NORMAL_H }).catch(() => {});
-    render();
+    leaveRelationsCanvas();
     restoreFocus();
   }
 }
-function closeRelations() {
-  if (!state.relOpen) return;
+function leaveRelationsCanvas() {
   state.relOpen = false;
   document.body.classList.remove('rel-canvas');
-  if (hasTauri) call('set_window_size', { width: REL_NORMAL_W, height: REL_NORMAL_H }).catch(() => {});
+  cancelWindowFit();
+  restoreCardWindowSize();
   render();
+  /* render→syncFit 会再排队 fit；取消掉，避免刚恢复的高度被内容测量再收一截。 */
+  cancelWindowFit();
+}
+function closeRelations() {
+  if (!state.relOpen && !document.body.classList.contains('rel-canvas')) return;
+  leaveRelationsCanvas();
   restoreFocus();
 }
 
@@ -3900,6 +3970,7 @@ function trapTabIn(panel, e) {
   return false;
 }
 function bindUI() {
+  document.body.classList.toggle('occluded', document.hidden);
   renderThemePicker();
   $('btnScanExisting').onclick = () => addRootFlow(true);
   $('btnStartEmpty').onclick = () => startWithoutProject();
@@ -4124,6 +4195,7 @@ function bindUI() {
   });
 
   document.addEventListener('visibilitychange', () => {
+    document.body.classList.toggle('occluded', document.hidden);
     /* 窗口恢复时强制刷新，经 coordinator 与可能同时到达的事件合并，避免并发全量扫描。
        pureRefresh=true（纯数据同步不 reveal）+ includeRuntime=true（隐藏后回来需完整快照）。 */
     if (!document.hidden && state.view === 'main') requestRefresh({ pureRefresh: true, includeRuntime: true });
@@ -4142,20 +4214,17 @@ function bindExcerptFit() {
   /* 原生窗口 resize 完成后，WebView 的 innerHeight 才会更新；重新测量
      可避免卡片仍按 resize 前的视口高度布局，导致底部出现透明空白。 */
   window.addEventListener('resize', () => {
-    if (state.view === 'main' && state.mode === 'card' && !state.treeOpen) {
-      /* 区分「用户手动拉伸」vs「fit 触发的 set_size」：
-         fit 触发的 set_size 是异步的，resize 事件可能在 fitInFlight=false 后才到达。
-         用时间窗口（fitActiveUntil）判断：fit 生效期内到达的 resize 不算用户操作。
-         否则翻面/详情页的 fit 缩放会被误判为「用户拉伸」，导致之后不收缩。 */
+    if (state.view === 'main' && state.mode === 'card' && !state.treeOpen
+        && !document.body.classList.contains('rel-canvas')) {
+      /* 区分「用户手动拉伸」vs 程序化 set_size：fitActiveUntil 覆盖 fit 与
+         set_window_size / set_window_mode。关联画布拉伸不写入卡片高度。 */
       if (!fitInFlight && Date.now() > fitActiveUntil) {
-        userResized = true;
-        document.body.classList.add('user-resized');
-        /* 用户手动拉伸后：记录当前视图高度到缓存（下次切回该视图直接恢复）。 */
-        const k = state.flipped ? 'back' : (state.adminOpen ? 'admin' : 'card');
+        markUserResized(true);
+        const k = viewFitKey();
         state.winHeights[k] = window.innerHeight;
+        state.winWidths[k] = window.innerWidth;
         savePrefs();
       }
-      /* 窗口实际尺寸已变，同步 fit 状态机基线，避免误判目标差。 */
       fitLastSent = window.innerHeight;
       scheduleWindowFit();
     }
@@ -4178,8 +4247,9 @@ async function boot() {
     state.roots = cfg.roots || [];
     state.alwaysOnTop = !!cfg.alwaysOnTop;   /* 后端为权威来源 */
     state.configured = !!cfg.configured;
+    state.wslInfo.supported = !!cfg.wslSupported;
   }
-  /* WSL 观察模式信息（发行版列表 + 当前配置），异步加载，不阻塞首屏 */
+  /* WSL 观察：仅 Windows 拉发行版列表。macOS / Linux 不出现该设置段。 */
   loadWslInfo();
   /* 事件订阅在首屏 refresh 前注册：消除「首屏 render 完成 → 订阅就绪」之间的
      丢事件窗口期。bindWatch 只注册 listen，不依赖 refresh 结果或 main DOM。 */
@@ -4196,7 +4266,15 @@ async function boot() {
     $('setup').hidden = true;
     $('mainView').hidden = false;
     /* 启动后强制对齐一次窗口模式，避免状态与窗口尺寸不一致 */
-    if (hasTauri) call('set_window_mode', { mode: state.mode }).catch(() => {});
+    if (hasTauri) {
+      beginProgrammaticResize();
+      const modeArgs = { mode: state.mode };
+      if (state.mode === 'card') {
+        modeArgs.width = cardRestoreWidth();
+        modeArgs.height = cardRestoreHeight();
+      }
+      call('set_window_mode', modeArgs).catch(() => {});
+    }
     await refresh(true);
     /* 用户已保存「显示已归档」：首屏后补拉各项目归档任务，避免归档列表为空 */
     if (state.showArchived) await ensureAllArchived();
