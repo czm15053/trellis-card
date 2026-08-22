@@ -18,6 +18,7 @@ use session::{HookEvent, SessionRegistry};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 pub struct AppState {
@@ -25,7 +26,18 @@ pub struct AppState {
     runtime: Mutex<RuntimeStore>,
     /* runtime 快照 build/flush 协调器：全触发源共用，串行 + debounce */
     runtime_coord: RuntimeCoordinator,
+    /* 项目发现缓存：list_projects / is_allowed_project 高频调用，避免每次重新扫 roots。
+    TTL 2s，config 变更（roots/动态项目）时主动失效。 */
+    projects_cache: Mutex<ProjectsCache>,
 }
+
+#[derive(Default)]
+struct ProjectsCache {
+    discovered: Vec<PathBuf>,
+    generated_at: Option<Instant>,
+}
+
+const PROJECTS_CACHE_TTL: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 struct RuntimeStore {
@@ -212,6 +224,31 @@ pub(crate) fn discover_all(cfg: &AppConfig) -> Vec<PathBuf> {
     out
 }
 
+/* 带 TTL 的项目发现缓存：refresh 会连续对多个项目调用 list_tasks/list_relations/list_specs，
+每次都重新 discover_all 会 O(N²) 扫盘。缓存 2s 足够覆盖单次 refresh，config 变更时失效。 */
+fn cached_discover_all(state: &AppState) -> Vec<PathBuf> {
+    let now = Instant::now();
+    {
+        let cache = state.projects_cache.lock().unwrap();
+        if let Some(t) = cache.generated_at {
+            if now.duration_since(t) < PROJECTS_CACHE_TTL {
+                return cache.discovered.clone();
+            }
+        }
+    }
+    let cfg = state.config.lock().unwrap();
+    let discovered = discover_all(&cfg);
+    let mut cache = state.projects_cache.lock().unwrap();
+    cache.discovered = discovered.clone();
+    cache.generated_at = Some(now);
+    discovered
+}
+
+fn invalidate_projects_cache(state: &AppState) {
+    let mut cache = state.projects_cache.lock().unwrap();
+    cache.generated_at = None;
+}
+
 fn project_dir_for_path(path: &Path) -> Option<PathBuf> {
     let mut current = if path.is_dir() {
         path.to_path_buf()
@@ -257,6 +294,8 @@ fn register_dynamic_project(state: &AppState, path: &str) -> Option<(PathBuf, bo
     drop(cfg);
     if let Err(error) = config::save(&snapshot) {
         eprintln!("[projects] 保存动态项目失败: {error}");
+    } else {
+        invalidate_projects_cache(state);
     }
     Some((project, true))
 }
@@ -282,14 +321,15 @@ fn is_discovered_project(cfg: &AppConfig, project: &Path) -> bool {
 
 // 允许访问 roots 扫描到的项目，以及 Hook 已发现的动态项目。
 fn is_allowed_project(state: &AppState, project: &str) -> bool {
-    let cfg = state.config.lock().unwrap();
     let target = expand(project);
-    discover_all(&cfg).contains(&target)
+    cached_discover_all(state).contains(&target)
 }
 
 fn save_state(state: &AppState) -> Result<(), String> {
     let cfg = state.config.lock().unwrap().clone();
-    config::save(&cfg)
+    config::save(&cfg)?;
+    invalidate_projects_cache(state);
+    Ok(())
 }
 
 fn now_seconds() -> i64 {
@@ -348,8 +388,7 @@ fn is_completion_transition(prev: Option<&str>, cur: &str) -> bool {
 
 fn build_runtime_snapshot(state: &AppState) -> RuntimeSnapshot {
     let now = now_seconds();
-    let cfg = state.config.lock().unwrap().clone();
-    let projects = discover_all(&cfg);
+    let projects = cached_discover_all(state);
     let mut runtime = state.runtime.lock().unwrap();
     runtime.sessions.prune(now);
     let mut views = Vec::new();
@@ -830,8 +869,7 @@ fn open_url(url: String) -> Result<(), String> {
 
 #[tauri::command]
 fn list_projects(state: State<AppState>) -> Vec<scan::ProjectInfo> {
-    let cfg = state.config.lock().unwrap();
-    discover_all(&cfg)
+    cached_discover_all(&state)
         .iter()
         .map(|dir| scan::project_info(dir))
         .collect()
@@ -1399,6 +1437,7 @@ pub fn run() {
                 config: Mutex::new(cfg.clone()),
                 runtime: Mutex::new(RuntimeStore::default()),
                 runtime_coord: RuntimeCoordinator::spawn(handle.clone()),
+                projects_cache: Mutex::new(ProjectsCache::default()),
             });
 
             start_runtime_workers(app.handle());
@@ -1943,6 +1982,7 @@ mod tests {
             }),
             runtime: Mutex::new(RuntimeStore::default()),
             runtime_coord: RuntimeCoordinator::new(),
+            projects_cache: Mutex::new(ProjectsCache::default()),
         }
     }
 

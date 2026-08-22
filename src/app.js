@@ -1359,6 +1359,7 @@ function observeLedFor(displayState) {
    动画防闪烁：内容未变（仅 render 触发，如 agent-state-changed 高频推送）时加 no-anim，
    避免 tlIn 入场动画每次重建都重播导致「每秒跳动」；内容真正变化时才播一次入场动效。 */
 const _timelineSeen = new Set();
+const TIMELINE_SEEN_MAX = 200; // 防内存无限增长：超限后清空，动画会重播一次但可接受
 function observeTimelineFor(rt, t) {
   const entries = [];
   const sec = (v) => (typeof v === 'number' ? v : null);
@@ -1381,6 +1382,7 @@ function observeTimelineFor(rt, t) {
   if (_timelineSeen.has(html)) {
     cls += ' no-anim';
   } else {
+    if (_timelineSeen.size >= TIMELINE_SEEN_MAX) _timelineSeen.clear();
     _timelineSeen.add(html);
   }
   return `<ul class="${cls}" aria-label="最近活动">${html}</ul>`;
