@@ -120,6 +120,23 @@ let entered = false;      // 卡片是否已完成首次进入动画
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+/* Trellis 0.7 路径 glob 匹配：支持 *、**、? */
+function globMatch(pattern, path) {
+  if (!pattern || !path) return false;
+  const p = String(pattern).replace(/\\/g, '/');
+  const s = String(path).replace(/\\/g, '/');
+  if (p === s) return true;
+  const regStr = '^' + p
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*/g, '.*')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '.') + '$';
+  try {
+    return new RegExp(regStr).test(s);
+  } catch {
+    return false;
+  }
+}
 /* Lucide 图标：内联 SVG（用于 JS 动态渲染处）；静态 HTML 用 icons.svg 精灵 <use>。
    aria-hidden 由调用方决定（图标按钮旁必有文字/aria-label 承载语义）。 */
 function icon(name, size = 14) {
@@ -1526,6 +1543,7 @@ function renderCard(t, projectActivity) {
         </div>
         <div class="meta${t.artifacts ? '' : ' rule'}">
           ${t.priority ? `<span class="chip priority${priorityClass}">${esc(t.priority)}</span>` : ''}
+          ${t.workflow ? `<span class="chip workflow-chip" title="工作流变体: ${esc(t.workflow)}">${esc(t.workflow)}</span>` : ''}
           ${t.branch ? `<span class="chip br branch-meta">${esc(t.branch)}</span>` : ''}
           ${liveBadge(t)}
         </div>
@@ -1946,6 +1964,26 @@ function renderBack(t, docs, loading, error) {
       <div class="dtabs">${tabs}</div>
       <div class="doc">${mdRender(sel.content)}</div>`;
   }
+  /* 约束规范展示（Trellis 0.7 动态 Spec paths 命中 + 显式 specRefs） */
+  let governingHtml = '';
+  const projSpecs = (t.project && state.specsByProject[t.project]) || [];
+  if (projSpecs.length) {
+    const matchedSpecs = projSpecs.filter(s => {
+      if ((t.specRefs || []).some(r => r === s.path || r.endsWith(s.path))) return true;
+      if (s.paths && s.paths.length) {
+        return (t.fileRefs || []).some(f => s.paths.some(p => globMatch(p, f)));
+      }
+      return false;
+    });
+    if (matchedSpecs.length) {
+      governingHtml = `<div class="governing-specs">
+        <div class="b-label">约束规范 · ${matchedSpecs.length}</div>
+        <div class="governing-specs-chips">${matchedSpecs.map(s =>
+          `<span class="governing-spec-chip" title="${esc(s.path)}${s.paths && s.paths.length ? `&#10;约束: ${esc(s.paths.join(', '))}` : ''}">${esc(s.name)}</span>`
+        ).join('')}</div>
+      </div>`;
+    }
+  }
   const detailMetrics = metricTags(t);
   const inspectMode = state.evidenceTarget && keyOf(state.evidenceTarget) === keyOf(t) ? 'evidence' : 'detail';
   const inspectHeader = inspectMode === 'evidence'
@@ -1973,6 +2011,7 @@ function renderBack(t, docs, loading, error) {
       ${inspectHeader}
       ${detailStatus}
       ${artsMini(t)}
+      ${governingHtml}
       ${detailMetrics ? `<div class="detail-metrics"><div class="b-label">任务指标</div>${detailMetrics}</div>` : ''}
       ${runtimeEvidence}
       ${docsHtml}
@@ -2141,7 +2180,7 @@ function taskNode(task, kids, focused, level) {
         ${isLive(task) ? '<span class="live-dot" title="有活跃会话"></span>' : ''}
         <div class="bar"><i style="width:${pct}%;background:${color}"></i></div>
       </div>
-      <div class="sub">${task.archived ? '<span class="archived-tag" title="已归档任务，仅查看">已归档</span>' : ''}${esc(subLabel)}</div>
+      <div class="sub">${task.archived ? '<span class="archived-tag" title="已归档任务，仅查看">已归档</span>' : ''}${task.workflow ? `<span class="wf-tag" title="工作流: ${esc(task.workflow)}">${esc(task.workflow)}</span>` : ''}${esc(subLabel)}</div>
     </div>
     ${task.archived ? '<span class="lane archived-lane" title="已归档">·</span>' : `<button type="button" class="tree-archive" data-key="${esc(key)}" title="归档 ${esc(task.title || task.id)}"
       aria-label="归档 ${esc(task.title || task.id)}">归档</button>`}
@@ -2373,6 +2412,7 @@ function renderRelations(focused) {
       <span class="rel-board-linkbtn" data-linkkey="${esc(keyOf(t))}" title="查看此任务的关联">关联</span>
       <span class="rel-board-meta">
         <span class="rel-board-status">${esc(statusText)}</span>
+        ${t.workflow ? `<span class="rel-board-wf" title="工作流变体: ${esc(t.workflow)}">${esc(t.workflow)}</span>` : ''}
         ${priClass ? `<span class="rel-board-pri ${priClass}">${esc(pri)}</span>` : ''}
         ${state.projects.length > 1 && t.project ? `<span class="rel-board-proj">${esc(t.project)}</span>` : ''}
         ${sessCount > 1 ? `<span class="rel-board-sess" title="${sessCount} 个 AI 会话处理过此任务">${sessCount} 会话</span>` : ''}
@@ -2413,8 +2453,10 @@ function renderRelations(focused) {
             <span class="rel-spec-status">${s.filled ? '✓ 已沉淀' : '○ 空模板'}</span>
             <span class="rel-spec-lines">${s.lineCount} 行</span>
             ${refCount.get(s.path) ? `<span class="rel-spec-refs">${refCount.get(s.path)} 任务用</span>` : ''}
+            ${s.paths && s.paths.length ? `<span class="rel-spec-paths-count" title="约束路径:\n${esc(s.paths.join('\n'))}">${s.paths.length} 约束</span>` : ''}
           </span>
         </summary>
+        ${s.paths && s.paths.length ? `<div class="rel-spec-paths-chips" title="约束路径模式">${s.paths.map(p => `<code class="rel-spec-path-chip" title="${esc(p)}">${esc(p)}</code>`).join('')}</div>` : ''}
         <div class="rel-spec-body doc">${s.content ? mdRender(s.content, false) : '<span class="dim">（空）</span>'}</div>
       </details>`;
       /* 渲染按 category 聚合的组（分类组默认全部展开），组内 spec 卡片 */
@@ -2547,6 +2589,7 @@ function renderRelations(focused) {
             <span class="rel-board-caret">${relCollapsed.has(g.ref) ? '▸' : '▾'}</span>
             <span class="rel-board-group-dot" style="background:${col}"></span>
             <span class="rel-board-group-name" title="${esc(g.ref)}">共享规范 · ${esc(refName)}</span>
+            ${spec && spec.paths && spec.paths.length ? `<span class="rel-spec-paths-count" title="${esc(spec.paths.join(', '))}">约束 ${spec.paths.length} 路径</span>` : ''}
             <span class="rel-board-group-count">${g.members.length} 任务${spec ? ` · <button type="button" class="rel-spec-preview-btn" data-spec-preview="${esc(g.ref)}" data-project="${esc(g.members[0].project)}" title="预览规范 md 文档">预览 ▾</button>` : ''}</span>
           </div>
           <div class="rel-spec-preview-body" hidden></div>
@@ -2989,7 +3032,7 @@ function renderCapsule(t, projectActivity) {
   const previewActivity = $('capPreviewActivity');
   const previewExcerptEl = $('capPreviewExcerpt');
   if (previewState) previewState.textContent = semanticActivity || DISPLAY_COPY[displayState] || displayState || '空闲';
-  if (previewPhase) previewPhase.textContent = `Phase · ${phaseText}`;
+  if (previewPhase) previewPhase.textContent = `Phase · ${phaseText}${t && t.workflow ? ` · ${t.workflow}` : ''}`;
   if (previewProgress) {
     previewProgress.textContent = t && progressText
       ? `开发 ${Math.round(Math.max(0, Math.min(1, t.progress || 0)) * 100)}% · ${progressText}`

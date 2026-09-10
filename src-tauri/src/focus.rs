@@ -297,6 +297,7 @@ mod tests {
                 warn: false,
             },
             dir: "07-26-cpa-cpamp-apk".into(),
+            workflow: None,
         };
         let session = AgentRuntime {
             session_id: "s1".into(),

@@ -40,6 +40,7 @@ pub struct RawTask {
     pub subtasks: Vec<Subtask>,
     pub created_at: Option<String>,
     pub completed_at: Option<String>,
+    pub workflow: Option<String>,
 }
 
 // 输出给前端的归一化任务（含计算字段）
@@ -83,6 +84,8 @@ pub struct Task {
     // 细粒度工作流阶段（比 lane 更精确：规划内部还分 1.0-1.5）
     pub phase: Phase,
     pub dir: String,
+    // 生效的 workflow 变体 ID（Trellis 0.7 动态 workflow 变体）
+    pub workflow: Option<String>,
 }
 
 // 任务目录产物：prd/design/implement 文档、research、jsonl 上下文、验收报告
@@ -488,6 +491,124 @@ fn mtime_ms(p: &Path) -> i64 {
 struct TaskLocation<'a> {
     rel_dir: &'a str,
     archived: bool,
+    developer_workflow: Option<&'a str>,
+    config_default_workflow: Option<&'a str>,
+}
+
+// 读取 .trellis/.developer 中针对当前开发者的 workflow 覆盖（workflow=<id>）
+fn read_developer_workflow(project_dir: &Path) -> Option<String> {
+    let dev_file = project_dir.join(".trellis").join(".developer");
+    let content = fs::read_to_string(dev_file).ok()?;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(val) = trimmed.strip_prefix("workflow=") {
+            let id = val.trim();
+            if !id.is_empty()
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
+
+// 读取 .trellis/config.yaml 中团队共享的 default_workflow 配置
+fn read_config_default_workflow(project_dir: &Path) -> Option<String> {
+    let config_file = project_dir.join(".trellis").join("config.yaml");
+    let content = fs::read_to_string(config_file).ok()?;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(val) = trimmed.strip_prefix("default_workflow:") {
+            let id = val.trim().trim_matches('\'').trim_matches('"');
+            if !id.is_empty()
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
+
+// 解析生效的 workflow 变体 ID，支持 Trellis 0.7 四层回退优先级链：
+// 1. 任务 pin (task.json `workflow`)
+// 2. 个人覆盖 (.trellis/.developer `workflow=`)
+// 3. 团队默认 (.trellis/config.yaml `default_workflow:`)
+// 4. 全局回退 (None)
+pub fn resolve_task_workflow(
+    task_workflow: Option<&str>,
+    developer_workflow: Option<&str>,
+    config_default_workflow: Option<&str>,
+) -> Option<String> {
+    let is_valid = |id: &str| {
+        !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    };
+    if let Some(id) = task_workflow.map(|s| s.trim()).filter(|s| is_valid(s)) {
+        return Some(id.to_string());
+    }
+    if let Some(id) = developer_workflow.map(|s| s.trim()).filter(|s| is_valid(s)) {
+        return Some(id.to_string());
+    }
+    if let Some(id) = config_default_workflow
+        .map(|s| s.trim())
+        .filter(|s| is_valid(s))
+    {
+        return Some(id.to_string());
+    }
+    None
+}
+
+/// 从 Markdown 头部提取 YAML frontmatter 中的 `paths` glob 规则列表（Trellis 0.7 动态 Spec 加载规范）。
+pub fn extract_spec_paths(content: &str) -> Vec<String> {
+    let mut lines = content.lines();
+    if lines.next().map(|l| l.trim()) != Some("---") {
+        return Vec::new();
+    }
+    let mut in_paths = false;
+    let mut paths = Vec::new();
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            break;
+        }
+        if let Some(rest) = trimmed.strip_prefix("paths:") {
+            in_paths = true;
+            let val = rest.trim();
+            if val.starts_with('[') && val.ends_with(']') {
+                let inner = &val[1..val.len() - 1];
+                for item in inner.split(',') {
+                    let s = item.trim().trim_matches('\'').trim_matches('"');
+                    if !s.is_empty() {
+                        paths.push(s.to_string());
+                    }
+                }
+                in_paths = false;
+            }
+            continue;
+        }
+        if in_paths {
+            if let Some(item) = trimmed.strip_prefix("- ") {
+                let p = item.trim().trim_matches('\'').trim_matches('"');
+                if !p.is_empty() {
+                    paths.push(p.to_string());
+                }
+            } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                in_paths = false;
+            }
+        }
+    }
+    paths
 }
 
 // 归一化 + 计算字段（progress/stage/lane/kind/sessions/excerpt/artifacts/phase/spec_refs）
@@ -511,6 +632,11 @@ fn build_task(
     let progress = crate::progress::compute_progress(&status, &raw.subtasks);
     let (lane, kind) = crate::progress::lane_model(&status);
     let phase = infer_phase(&status, &artifacts);
+    let workflow = resolve_task_workflow(
+        raw.workflow.as_deref(),
+        location.developer_workflow,
+        location.config_default_workflow,
+    );
     Task {
         id: raw.id.clone().unwrap_or_else(|| dir_name.to_string()),
         title: raw.title.clone().unwrap_or_else(|| dir_name.to_string()),
@@ -541,6 +667,7 @@ fn build_task(
         prd_refs,
         phase,
         dir: location.rel_dir.to_string(),
+        workflow,
     }
 }
 
@@ -565,7 +692,17 @@ pub fn scan_archived(project_dir: &Path) -> (Vec<Task>, Vec<String>) {
     let archive_dir = tasks_dir.join("archive");
     if is_directory(&archive_dir) {
         let sessions = scan_sessions(project_dir);
-        scan_archived_dir(&tasks_dir, &archive_dir, &sessions, &mut tasks, &mut errors);
+        let dev_workflow = read_developer_workflow(project_dir);
+        let config_workflow = read_config_default_workflow(project_dir);
+        scan_archived_dir(
+            &tasks_dir,
+            &archive_dir,
+            &sessions,
+            dev_workflow.as_deref(),
+            config_workflow.as_deref(),
+            &mut tasks,
+            &mut errors,
+        );
     }
     tasks.sort_by(|a, b| {
         a.created_at
@@ -585,6 +722,8 @@ fn scan_tasks_inner(project_dir: &Path, include_archived: bool) -> (Vec<Task>, V
         return (tasks, errors);
     }
     let sessions = scan_sessions(project_dir);
+    let dev_workflow = read_developer_workflow(project_dir);
+    let config_workflow = read_config_default_workflow(project_dir);
     let entries = match fs::read_dir(&tasks_dir) {
         Ok(e) => e,
         Err(err) => {
@@ -598,7 +737,15 @@ fn scan_tasks_inner(project_dir: &Path, include_archived: bool) -> (Vec<Task>, V
         /* archive/ 目录：默认跳过；include_archived 时递归扫描其中的任务 */
         if dir_name == "archive" {
             if include_archived {
-                scan_archived_dir(&tasks_dir, &task_path, &sessions, &mut tasks, &mut errors);
+                scan_archived_dir(
+                    &tasks_dir,
+                    &task_path,
+                    &sessions,
+                    dev_workflow.as_deref(),
+                    config_workflow.as_deref(),
+                    &mut tasks,
+                    &mut errors,
+                );
             }
             continue;
         }
@@ -616,6 +763,8 @@ fn scan_tasks_inner(project_dir: &Path, include_archived: bool) -> (Vec<Task>, V
             false,
             &task_path,
             &sessions,
+            dev_workflow.as_deref(),
+            config_workflow.as_deref(),
             &mut tasks,
             &mut errors,
         );
@@ -635,6 +784,8 @@ fn scan_archived_dir(
     tasks_dir: &Path,
     archive_dir: &Path,
     sessions: &std::collections::HashMap<String, Vec<SessionInfo>>,
+    dev_workflow: Option<&str>,
+    config_workflow: Option<&str>,
     tasks: &mut Vec<Task>,
     errors: &mut Vec<String>,
 ) {
@@ -653,7 +804,15 @@ fn scan_archived_dir(
         }
         /* 年月子目录（archive/2026-08/）：继续深入一层找任务 */
         if !path.join("task.json").is_file() {
-            scan_archived_dir(tasks_dir, &path, sessions, tasks, errors);
+            scan_archived_dir(
+                tasks_dir,
+                &path,
+                sessions,
+                dev_workflow,
+                config_workflow,
+                tasks,
+                errors,
+            );
             continue;
         }
         if is_bootstrap_guidelines(&dir_name) {
@@ -661,7 +820,17 @@ fn scan_archived_dir(
         }
         /* 任务目录：rel_dir 保留相对 tasks/ 的完整路径（含年月段），供 get_task 定位文档 */
         let full_rel = relative_to(tasks_dir, &path);
-        scan_task_dir(&dir_name, &full_rel, true, &path, sessions, tasks, errors);
+        scan_task_dir(
+            &dir_name,
+            &full_rel,
+            true,
+            &path,
+            sessions,
+            dev_workflow,
+            config_workflow,
+            tasks,
+            errors,
+        );
     }
 }
 
@@ -673,12 +842,15 @@ fn relative_to(base: &Path, path: &Path) -> String {
 }
 
 // 解析单个任务目录并加入 tasks；rel_dir 相对 .trellis/tasks/，archived 标记归档归属。
+#[allow(clippy::too_many_arguments)]
 fn scan_task_dir(
     dir_name: &str,
     rel_dir: &str,
     archived: bool,
     task_path: &Path,
     sessions: &std::collections::HashMap<String, Vec<SessionInfo>>,
+    developer_workflow: Option<&str>,
+    config_default_workflow: Option<&str>,
     tasks: &mut Vec<Task>,
     errors: &mut Vec<String>,
 ) {
@@ -738,7 +910,12 @@ fn scan_task_dir(
         spec_refs,
         file_refs,
         prd_refs,
-        TaskLocation { rel_dir, archived },
+        TaskLocation {
+            rel_dir,
+            archived,
+            developer_workflow,
+            config_default_workflow,
+        },
     ));
 }
 
@@ -1258,5 +1435,70 @@ mod tests {
         assert!(docs_only.phase.warn);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn extract_spec_paths_parses_yaml_blocks_and_flow() {
+        let yaml_block = r#"---
+name: test-spec
+description: test
+paths:
+  - packages/cli/src/commands/workflow.ts
+  - "packages/cli/test/**"
+---
+# Content"#;
+        assert_eq!(
+            extract_spec_paths(yaml_block),
+            vec![
+                "packages/cli/src/commands/workflow.ts",
+                "packages/cli/test/**"
+            ]
+        );
+
+        let yaml_flow = r#"---
+paths: [src/index.ts, 'test/*.test.js', "docs/**"]
+---
+# Content"#;
+        assert_eq!(
+            extract_spec_paths(yaml_flow),
+            vec!["src/index.ts", "test/*.test.js", "docs/**"]
+        );
+
+        let no_frontmatter = "# Just heading\npaths:\n  - a.js\n";
+        assert!(extract_spec_paths(no_frontmatter).is_empty());
+
+        let no_paths = "---\nname: hello\n---\n";
+        assert!(extract_spec_paths(no_paths).is_empty());
+    }
+
+    #[test]
+    fn resolve_task_workflow_follows_four_layer_precedence() {
+        // 1. Task pin wins
+        assert_eq!(
+            resolve_task_workflow(
+                Some("custom-tdd"),
+                Some("dev-override"),
+                Some("team-default")
+            ),
+            Some("custom-tdd".to_string())
+        );
+        // 2. Developer override wins when task unset
+        assert_eq!(
+            resolve_task_workflow(None, Some("dev-override"), Some("team-default")),
+            Some("dev-override".to_string())
+        );
+        // 3. Team config default wins when developer unset
+        assert_eq!(
+            resolve_task_workflow(None, None, Some("team-default")),
+            Some("team-default".to_string())
+        );
+        // 4. Global fallback None
+        assert_eq!(resolve_task_workflow(None, None, None), None);
+
+        // 5. Invalid characters (such as path traversal) are rejected
+        assert_eq!(
+            resolve_task_workflow(Some("../escape"), Some("dev-valid"), None),
+            Some("dev-valid".to_string())
+        );
     }
 }

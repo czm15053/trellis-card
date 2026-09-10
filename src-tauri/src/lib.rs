@@ -158,6 +158,7 @@ struct TaskRelation {
     progress: f64,
     kind: String,
     archived: bool,
+    workflow: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -185,7 +186,7 @@ struct RelationsPayload {
     prd_groups: Vec<PrdGroup>,
 }
 
-// 项目规范地图条目：规范路径、显示名、分类、填写状态、被引用次数、正文
+// 项目规范地图条目：规范路径、显示名、分类、填写状态、被引用次数、正文、约束路径规则
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SpecOut {
@@ -196,6 +197,7 @@ struct SpecOut {
     line_count: usize,
     referenced_by: usize,
     content: String,
+    paths: Vec<String>,
 }
 
 // ---------- 辅助 ----------
@@ -937,6 +939,7 @@ fn list_relations(state: State<AppState>, project: String) -> Result<RelationsPa
             progress: t.progress,
             kind: t.kind.clone(),
             archived: t.archived,
+            workflow: t.workflow.clone(),
         })
         .collect();
     let spec_groups = compute_spec_groups(&task_relations);
@@ -993,6 +996,7 @@ fn list_specs(state: State<AppState>, project: String) -> Result<Vec<SpecOut>, S
                             })
                             .count();
                         let rel_path = format!("{}/{}", category, name);
+                        let paths = crate::scan::extract_spec_paths(&content);
                         specs.push(SpecOut {
                             path: rel_path,
                             name: if name == "index.md" {
@@ -1005,6 +1009,7 @@ fn list_specs(state: State<AppState>, project: String) -> Result<Vec<SpecOut>, S
                             line_count: real_lines,
                             referenced_by: 0,
                             content,
+                            paths,
                         });
                     }
                 }
@@ -1686,6 +1691,7 @@ mod tests {
             progress: 0.5,
             kind: "work".into(),
             archived: false,
+            workflow: None,
         };
         let relations = vec![
             rel("a", vec![".trellis/spec/frontend/index.md"]),
@@ -1724,6 +1730,7 @@ mod tests {
             progress: 0.5,
             kind: "work".into(),
             archived: false,
+            workflow: None,
         };
         let relations = vec![
             rel("a", vec![".trellis/spec/frontend/index.md"]),
@@ -1757,6 +1764,7 @@ mod tests {
             progress: 0.5,
             kind: "work".into(),
             archived: false,
+            workflow: None,
         };
         let relations = vec![
             rel("a", vec!["b", "ghost"]), // 引 b（存在）+ ghost（不存在，应过滤）

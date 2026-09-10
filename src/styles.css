@@ -1447,6 +1447,58 @@ select.mini.wsl-select:disabled{opacity:.48;cursor:wait}
   cursor:pointer;padding:2px 4px;border-radius:6px;
 }
 .update-close:hover{color:var(--chalk);background:color-mix(in srgb,var(--chalk) 8%,transparent)}
+
+/* ---------- Trellis 0.7 动态 Spec paths 与 Workflow 样式 ---------- */
+.chip.workflow-chip{
+  display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;
+  color:#c678dd;border:1px solid color-mix(in srgb,#c678dd 35%,var(--line2));
+  background:color-mix(in srgb,#c678dd 10%,transparent);
+  font-family:var(--mono);font-size:9px;
+}
+.wf-tag{
+  display:inline-block;font-family:var(--mono);font-size:8px;padding:0 4px;margin-right:4px;
+  border-radius:3px;background:color-mix(in srgb,#c678dd 15%,transparent);
+  color:#c678dd;border:1px solid color-mix(in srgb,#c678dd 30%,transparent);
+}
+.rel-board-wf{
+  font-family:var(--mono);font-size:8.5px;color:#c678dd;
+  background:color-mix(in srgb,#c678dd 12%,transparent);
+  border:1px solid color-mix(in srgb,#c678dd 28%,transparent);
+  border-radius:3px;padding:0 4px;
+}
+.rel-spec-paths-count{
+  font-family:var(--mono);font-size:7.5px;color:#4aa3ff;
+  background:color-mix(in srgb,#4aa3ff 12%,transparent);
+  border-radius:3px;padding:0 4px;
+}
+.rel-spec-paths-chips{
+  display:flex;flex-wrap:wrap;gap:4px;padding:5px 8px 6px;
+  background:color-mix(in srgb,var(--chalk) 2%,transparent);
+  border-top:1px solid color-mix(in srgb,var(--line2) 40%,transparent);
+}
+.rel-spec-path-chip{
+  font-family:var(--mono);font-size:8px;color:#4aa3ff;
+  background:color-mix(in srgb,#4aa3ff 10%,transparent);
+  border:1px solid color-mix(in srgb,#4aa3ff 25%,transparent);
+  border-radius:3px;padding:1px 5px;max-width:100%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.governing-specs{
+  margin-top:8px;padding:6px 0;border-top:1px dashed var(--line2);
+}
+.governing-specs-chips{
+  display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;
+}
+.governing-spec-chip{
+  display:inline-flex;align-items:center;gap:3px;font-family:var(--mono);font-size:8.5px;
+  color:#4aa3ff;background:color-mix(in srgb,#4aa3ff 10%,transparent);
+  border:1px solid color-mix(in srgb,#4aa3ff 25%,transparent);
+  border-radius:3px;padding:1.5px 6px;cursor:pointer;
+}
+.governing-spec-chip:hover{
+  background:color-mix(in srgb,#4aa3ff 20%,transparent);
+  border-color:#4aa3ff;
+}
 .update-notes{margin:0;font-size:11px;color:var(--mist);line-height:1.5;max-height:60px;overflow:hidden}
 .update-actions{display:flex;gap:8px;margin-top:2px}
 .update-btn{

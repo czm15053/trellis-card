@@ -38,6 +38,10 @@
     'trellis-update-spec': '沉淀规范到 spec',
     'trellis-archive': '归档任务',
     'trellis-before-dev': '动手前读取规范',
+    'trellis-workflow': '切换/配置工作流',
+    'trellis:workflow': '切换/配置工作流',
+    'trellis-spec': '加载动态规范约束',
+    'inject-spec-context': '加载动态规范约束',
   });
   /* task.py 子命令（文档 2.2 节）语义 */
   const TASK_SUBCOMMANDS = Object.freeze({
@@ -54,12 +58,14 @@
     validate: '校验上下文引用',
     'add-subtask': '添加子任务',
     'remove-subtask': '解除子任务关联',
+    workflow: '指定工作流变体',
   });
   /* trellis CLI 命令（文档 1.2 节）语义 */
   const TRELLIS_CLI = Object.freeze({
     upgrade: '升级 Trellis CLI',
     update: '同步项目到 CLI 版本',
     init: '初始化 Trellis 项目',
+    workflow: '管理/切换工作流',
   });
   const phraseCounters = new Map();
 
