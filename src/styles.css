@@ -1670,6 +1670,20 @@ body.occluded *::after{animation-play-state:paused !important}
 }
 .dtab:hover{color:var(--mist);border-color:var(--line2)}
 .dtab.on{color:color-mix(in srgb,var(--accent) 85%,#fff);border-color:color-mix(in srgb,var(--accent) 40%,var(--line2));background:color-mix(in srgb,var(--accent) 9%,transparent)}
+/* 文档正文与活动证据文本可选：覆盖外层 .card 和 body 的 user-select: none */
+.doc,
+.runtime-evidence{
+  user-select:text;
+  -webkit-user-select:text;
+}
+/* 文档与证据选区高亮：覆盖全局透明 selection，契合深色主题与对比度规范 */
+.doc ::selection,
+.doc::selection,
+.runtime-evidence ::selection,
+.runtime-evidence::selection{
+  background:color-mix(in srgb,var(--accent,var(--amber)) 35%,rgba(255,255,255,.22));
+  color:var(--chalk);
+}
 /* 文档主体：markdown 渲染，撑满剩余空间 */
 .doc{
   flex:1;min-height:0;overflow-y:auto;padding-right:4px;
@@ -1693,7 +1707,7 @@ body.occluded *::after{animation-play-state:paused !important}
 .doc-section>summary{
   list-style:none;display:flex;align-items:center;gap:7px;cursor:pointer;
   padding:0 0 5px;font-family:var(--serif);font-size:14px;font-weight:650;
-  line-height:1.35;color:var(--chalk);user-select:none
+  line-height:1.35;color:var(--chalk);user-select:none;-webkit-user-select:none
 }
 .doc-section>summary::-webkit-details-marker{display:none}
 .doc-section>summary::before{
@@ -1714,9 +1728,41 @@ body.occluded *::after{animation-play-state:paused !important}
   background:color-mix(in srgb,var(--mint) 8%,transparent);border:1px solid color-mix(in srgb,var(--mint) 14%,transparent);
   border-radius:5px;padding:.5px 4px;
 }
+/* 代码块容器与快速复制按钮 */
+.doc-code-block{
+  position:relative;margin:8px 0;
+}
 .doc pre{
   margin:8px 0;padding:9px 11px;border-radius:10px;overflow-x:auto;
   background:color-mix(in srgb,var(--chalk) 7%,transparent);border:1px solid var(--line);
+  user-select:text;-webkit-user-select:text;
+}
+.doc-code-block pre{
+  margin:0;padding-right:54px;
+}
+.pre-copy-btn{
+  position:absolute;top:6px;right:6px;z-index:2;
+  display:inline-flex;align-items:center;gap:4px;
+  font-family:var(--mono);font-size:var(--text-badge);font-weight:600;line-height:1;
+  color:var(--dim);background:color-mix(in srgb,var(--bg, #10131b) 85%,transparent);
+  border:1px solid var(--line);border-radius:5px;padding:3px 6px;
+  cursor:pointer;opacity:0;transition:opacity .15s var(--ease),color .15s var(--ease),background .15s var(--ease),border-color .15s var(--ease);
+  user-select:none;-webkit-user-select:none;pointer-events:auto;backdrop-filter:blur(6px);
+}
+.pre-copy-btn svg{pointer-events:none;flex-shrink:0}
+.pre-copy-btn span{pointer-events:none}
+.doc-code-block:hover .pre-copy-btn,
+.pre-copy-btn:focus-visible,
+.pre-copy-btn.copied{
+  opacity:1;
+}
+.pre-copy-btn:hover{
+  color:var(--chalk);border-color:color-mix(in srgb,var(--accent,var(--amber)) 45%,var(--line2));
+  background:color-mix(in srgb,var(--accent,var(--amber)) 14%,transparent);
+}
+.pre-copy-btn.copied{
+  color:var(--mint);border-color:color-mix(in srgb,var(--mint) 45%,var(--line2));
+  background:color-mix(in srgb,var(--mint) 14%,transparent);
 }
 .doc pre code{background:none;border:none;padding:0;color:var(--mist);font-size:var(--text-sub);line-height:var(--lh-relaxed)}
 .doc blockquote{

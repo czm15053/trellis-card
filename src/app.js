@@ -2315,6 +2315,21 @@ if (typeof marked !== 'undefined') {
         token.text = escHtml(token.text);
       }
     },
+    renderer: {
+      code(codeOrToken, infoString, escaped) {
+        let codeText = '';
+        let lang = '';
+        if (typeof codeOrToken === 'object' && codeOrToken !== null) {
+          codeText = codeOrToken.text || '';
+          lang = codeOrToken.lang || '';
+        } else {
+          codeText = String(codeOrToken || '');
+          lang = String(infoString || '');
+        }
+        const langClass = lang ? ` class="language-${escHtml(lang)}"` : '';
+        return `<div class="doc-code-block"><button type="button" class="pre-copy-btn" aria-label="复制代码" title="复制代码">${icon('copy', 11)}<span>复制</span></button><pre><code${langClass}>${escaped ? codeText : escHtml(codeText)}\n</code></pre></div>`;
+      },
+    },
   });
 }
 const mdCache = new Map();
@@ -4702,6 +4717,40 @@ function bindUI() {
     e.preventDefault();
     e.stopPropagation();
     handleLinkNavigation(href);
+  });
+  /* 代码块一键复制按钮点击处理 */
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.pre-copy-btn');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const wrapper = btn.closest('.doc-code-block') || btn.closest('pre');
+    if (!wrapper) return;
+    const code = wrapper.querySelector('code');
+    const text = (code ? (code.textContent || code.innerText) : (wrapper.querySelector('pre') || wrapper).textContent || '').replace(/\n$/, '');
+    if (!text) return;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      btn.classList.add('copied');
+      btn.innerHTML = `${icon('check', 11)}<span>已复制</span>`;
+      setTimeout(() => {
+        btn.classList.remove('copied');
+        btn.innerHTML = `${icon('copy', 11)}<span>复制</span>`;
+      }, 1500);
+    } catch {
+      toast('复制失败');
+    }
   });
   /* 点击卡片空白区翻面；避让顶栏/菜单/sheet */
   $('flip').addEventListener('click', (e) => {
