@@ -97,6 +97,8 @@ const state = {
   flipped: false,         // 卡片是否翻到背面
   prdCache: null,         // 背面文档缓存 { key, docs, error }，聚焦切换即失效
   docSel: null,           // 背面当前选中的文档名
+  specReturnDoc: null,    // 进入规范预览前的文档名，退出预览时回到该标签
+  navHistory: [],         // 文档跳转历史栈 [{ task, docSel, scrollTop }]
   mode: 'card',           // 'card' | 'capsule'
   theme: isThemeId(document.body.dataset.theme) ? document.body.dataset.theme : 'specimen',
   showArchived: false,    // 是否显示已归档任务（用于树列表过滤）
@@ -1063,15 +1065,43 @@ async function ensureAllArchived() {
 }
 
 function updateStatus() {
-  const errs = Object.values(state.tasksByProject).reduce((n, b) => n + (b.errors ? b.errors.length : 0), 0);
+  const errList = [];
+  for (const [pName, b] of Object.entries(state.tasksByProject)) {
+    if (b.errors && b.errors.length) {
+      for (const err of b.errors) {
+        errList.push(`[${pName}] ${err}`);
+      }
+    }
+  }
+  const errs = errList.length;
   const active = pool().filter(unfinished).length;
   const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-  $('status').textContent =
+  const statusEl = $('status');
+  if (!statusEl) return;
+  statusEl.textContent =
     `${state.projects.length} 个项目 · ${active} 进行中 · ${time}` + (errs ? ` · ${errs} 条解析错误` : '');
+  if (errs) {
+    statusEl.title = `解析错误详情 (点击查看):\n${errList.join('\n')}`;
+    statusEl.style.cursor = 'pointer';
+    statusEl.onclick = () => {
+      toast(`解析错误: ${errList.join('；')}`);
+    };
+  } else {
+    statusEl.title = '';
+    statusEl.style.cursor = 'default';
+    statusEl.onclick = null;
+  }
 }
 async function manualRefresh() {
+  state.prdCache = null;
+  mdCache.clear();
   await refresh(true);
-  render();
+  const cur = state.evidenceTarget || currentFocus();
+  if (state.flipped && cur) {
+    await loadBack(cur, { force: true });
+  } else {
+    render();
+  }
   toast('已刷新');
 }
 
@@ -1161,12 +1191,10 @@ function renderStars() {
   fillFilterStars($('projectPop'));
   const chipLabel = $('projectChipLabel');
   if (chipLabel) chipLabel.textContent = state.filter ? state.filter : '全部项目';
-  const grabName = $('grabProjectName');
-  if (grabName) grabName.textContent = state.filter ? state.filter : '全部项目';
   const chip = $('btnProjectChip');
   if (chip) chip.classList.toggle('on', !!state.filter || isProjectPopOpen());
 }
-/* header 状态同步：蝴蝶灯取 card.runtimeState；meter（ticks+score）由 renderCard/renderProjectActivityCard 填充 */
+/* header 状态同步：蝴蝶灯取 card.runtimeState */
 function syncGrabHeader() {
   const card = $('card');
   const led = $('grabLed');
@@ -1458,9 +1486,7 @@ function renderProjectActivityCard(activity) {
       </div></div>
       <div class="foot"><span class="fid">${esc(activity.sessionId || 'session')}</span><span id="runtime-updated" class="when">更新于 ${esc(relTime(updatedAt)) || '—'}</span></div>
     </div>`;
-  /* 项目级会话：header meter 显示 AI（无 lane 进度） */
-  const grabMeter = $('grabMeter');
-  if (grabMeter) grabMeter.innerHTML = `<span class="ticks"><i class="c"></i></span><span class="score">AI</span>`;
+
 }
 
 function renderCard(t, projectActivity) {
@@ -1497,12 +1523,6 @@ function renderCard(t, projectActivity) {
       card.classList.toggle(`state-${name}`, displayState.replaceAll('_', '-') === name || (name === 'done' && displayState === 'turn_done'));
     }
     renderPost(t);
-    const lane = Math.min(3, Math.max(0, t.lane ?? 0));
-    const n = lane + 1;
-    const ticks = LANES.map((_, i) => {
-      const cls = (i < lane || t.kind === 'done') ? 'f' : (i === lane && t.kind !== 'done' ? 'c' : '');
-      return `<i class="${cls}"></i>`;
-    }).join('');
     const archiveReceipt = archiveReceiptFor(fKey);
     const actionLabel = rt.action ? (ACTION_COPY[rt.action] || rt.action) : '';
     const semanticActivity = archiveReceipt ? '已归档' : displayActivity(
@@ -1550,13 +1570,18 @@ function renderCard(t, projectActivity) {
         ${artsMini(t)}
         <div class="stage">${stageHtml(t, rt)}</div>
         <div class="foot">
-          <span class="fid">${esc(t.id)}</span>
-          <span id="runtime-updated" class="when">更新于 ${esc(relTime(updatedAt)) || '—'}</span>
+          <div class="foot-meta">
+            <span class="fid">${esc(t.id)}</span>
+            <span id="runtime-updated" class="when">更新于 ${esc(relTime(updatedAt)) || '—'}</span>
+          </div>
+          <button type="button" class="card-flip-pill" id="btnPillFlip" title="翻转至背面查看详情与文档 (快捷键 F)" aria-label="翻转至背面查看详情与文档">
+            <span class="flip-pill-text">文档 &amp; 证据</span>
+            <svg class="lucide flip-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-refresh"/></svg>
+            <kbd class="flip-kbd">F</kbd>
+          </button>
         </div>
       </div>`;
-    /* header meter：ticks 刻度 + score 百分比（原 .head observe-head 内容平移到 header） */
-    const grabMeter = $('grabMeter');
-    if (grabMeter) grabMeter.innerHTML = `<span class="ticks">${ticks}</span><span class="score">${n}<em>/4</em></span>`;
+
     /* 子任务 bar：点击展开/收起清单（直接切 class 保住过渡动画） */
     const box = $('subsBox');
     if (box) {
@@ -1580,6 +1605,14 @@ function renderCard(t, projectActivity) {
       };
       lockBtn.setAttribute('aria-pressed', String(state.focusMode === 'manual'));
       lockBtn.innerHTML = focusLockHtml(state.focusMode === 'manual');
+    }
+    /* 正面翻面药丸：直观入口 */
+    const pillFlip = main.querySelector('#btnPillFlip');
+    if (pillFlip) {
+      pillFlip.onclick = (e) => {
+        e.stopPropagation();
+        toggleFlip();
+      };
     }
     /* 查看活动：切换到最新未读候选的正面活动卡；多个未读任务逐个查看。 */
     const unreadBtn = main.querySelector('[data-clear-unread]');
@@ -1655,6 +1688,7 @@ function syncFit() {
 /* 渲染稳定后一次性把窗口高度对齐到内容高度：防抖 + 阈值，避免连续 set_size 打死 WKWebView */
 let fitWinTimer = null;
 const IDLE_WINDOW_HEIGHT = 400;
+const FRONT_CARD_MAX_HEIGHT = 540;
 const REL_CANVAS_W = 940;
 const REL_CANVAS_H = 900;
 const REL_NORMAL_W = 380;
@@ -1701,7 +1735,7 @@ function scheduleWindowFit() {
       if (!back) { world.style.maxHeight = ''; return; }
       const backTop = back.getBoundingClientRect().top - world.getBoundingClientRect().top;
       let content = 0, kids = 0;
-      back.querySelectorAll('.b-pane > *').forEach(el => {
+      back.querySelectorAll('.b-pane > *:not([hidden])').forEach(el => {
         kids++;
         content += el.classList.contains('doc') ? el.scrollHeight : el.getBoundingClientRect().height;
       });
@@ -1726,6 +1760,8 @@ function scheduleWindowFit() {
       /* 空闲页不随占位文案压缩：保持标准卡片窗口高度，菜单等绝对定位浮层
          才有稳定的可用空间。 */
       if (card.dataset.kind === 'idle') h = Math.max(h, IDLE_WINDOW_HEIGHT);
+      /* 视口阻尼：正面主卡片设定基准高度上限，超出部分依赖内部自滚动 */
+      h = Math.min(h, FRONT_CARD_MAX_HEIGHT);
     }
     /* 原生窗口高度有同一套屏幕上限；舞台也同步使用该上限，避免原生层被
        截短时前端仍保留一个更高的内容层。 */
@@ -1842,8 +1878,6 @@ function sendFitWindow(h) {
 }
 function applyFlipCard() {
   $('card').classList.toggle('flipped', state.flipped);
-  $('btnFlip').innerHTML = `${icon(state.flipped ? 'chevron-left' : 'book-open', 13)}<span>${state.flipped ? '返回' : '详情'}</span>`;
-  $('btnFlip').setAttribute('aria-label', state.flipped ? '返回任务观察' : '打开任务详情');
   syncFit();
 }
 function openUnreadActivity() {
@@ -1889,7 +1923,7 @@ function openUnreadActivity() {
   return true;
 }
 async function toggleFlip(force) {
-  if (state.mode !== 'card' || state.treeOpen || state.adminOpen) return;
+  if (state.mode !== 'card' || state.treeOpen || state.adminOpen || state.relOpen) return;
   const t = currentFocus();
   if (!t) return;
   const target = force !== undefined ? force : !state.flipped;
@@ -1902,16 +1936,59 @@ async function toggleFlip(force) {
      避免动画未完成时测量到不稳定的高度（详情页/概要页切换拉伸「时有时无」的根因）。 */
   setTimeout(scheduleWindowFit, 750);
 }
+function docsEqual(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const da = a[i], db = b[i];
+    if (da.name !== db.name || da.label !== db.label || da.content !== db.content) {
+      return false;
+    }
+  }
+  return true;
+}
+
+let isRevalidating = false;
+async function revalidateBack(t) {
+  if (!t || !state.flipped || isRevalidating) return false;
+  const key = keyOf(t);
+  isRevalidating = true;
+  try {
+    const full = await call('get_task', { project: t.projectPath || t.project, id: t.id });
+    const newDocs = (full && full.docs) || [];
+    const curTarget = state.evidenceTarget || currentFocus();
+    if (!state.flipped || !curTarget || keyOf(curTarget) !== key) {
+      return false;
+    }
+    const cached = state.prdCache && state.prdCache.key === key ? state.prdCache : null;
+    if (cached && !cached.error && docsEqual(cached.docs, newDocs)) {
+      return false;
+    }
+    state.prdCache = { key, docs: newDocs };
+    renderBack(t, newDocs, false, null, false, { preserveScroll: true });
+    return true;
+  } catch (e) {
+    console.error('[invoke:revalidateBack]', e);
+    return false;
+  } finally {
+    isRevalidating = false;
+  }
+}
+
 /* 背面数据：artifacts 用 list_tasks 自带的，文档（prd/design/implement/调研/报告等）走 get_task（聚焦期内缓存）。
-   activeTarget：本次展示的任务；异步返回时用它判断是否回填，避免 evidence 候选（非 currentFocus）停在加载中。 */
-async function loadBack(t) {
+   activeTarget：本次展示的任务；异步返回时用它判断是否回填，避免 evidence 候选（非 currentFocus）停在加载中。
+   支持 Stale-While-Revalidate：命中缓存先秒开，后台异步拉取重校验；支持 force 强制重读。 */
+async function loadBack(t, { force = false, silent = false } = {}) {
   const key = keyOf(t);
   state.backActiveKey = key;
-  if (state.prdCache && state.prdCache.key === key) {
-    renderBack(t, state.prdCache.docs, false, state.prdCache.error);
+  if (!force && state.prdCache && state.prdCache.key === key && !state.prdCache.error) {
+    renderBack(t, state.prdCache.docs, false, null);
+    /* SWR：命中缓存先秒开（保持翻面动画丝滑），后台异步重校验最新文档 */
+    revalidateBack(t);
     return;
   }
-  renderBack(t, null, true);   /* 加载中 */
+  if (!silent) renderBack(t, null, true);   /* 加载中 */
   try {
     const full = await call('get_task', { project: t.projectPath || t.project, id: t.id });
     state.prdCache = { key, docs: (full && full.docs) || [] };
@@ -1934,55 +2011,175 @@ async function loadBack(t) {
      延迟让 renderBack 布局稳定后再测量（翻面动画 + 内容渲染）。 */
   scheduleWindowFit();
 }
-function renderBack(t, docs, loading, error) {
+function renderBack(t, docs, loading, error, isTabSwitch = false, options = {}) {
   const back = $('back');
+  /* 记录当前激活文档面板的滚动条位置（SWR 或重绘时保持浏览进度） */
+  const curActiveDoc = back.querySelector('.doc-panel:not([hidden]), .doc-spec:not([hidden])');
+  const savedScrollTop = (options && options.preserveScroll && curActiveDoc) ? curActiveDoc.scrollTop : null;
   const rt = runtimeViewForTask(t);
   const phaseTrail = [t.phase && t.phase.id, rt.action, rt.displayState].filter(Boolean).map((item) => esc(DISPLAY_COPY[item] || ACTION_COPY[item] || item)).join(' → ');
   const runtimeTrail = rt.agent
     ? `<li><i></i>${esc(DISPLAY_COPY[rt.displayState] || rt.displayState)} · ${esc(rt.agent.toolName || rt.action || 'Agent')} · ${esc(relTime((rt.agent.updatedAt || 0) * 1000) || '刚刚')}</li>`
     : '<li><i></i>暂无实时 Agent 事件</li>';
-  /* 文档标签：默认选中 PRD（或第一个），切换记忆在本次聚焦内 */
-  let docsHtml = '';
-  if (loading) {
-    docsHtml = '<div class="doc dim">文档加载中…</div>';
-  } else if (error) {
-    docsHtml = [
-      '<div class="doc dim">',
-      '<p>文档读取失败：' + esc(error) + '</p>',
-      '<button type="button" class="mini" data-retry-doc>重新加载</button>',
-      '</div>',
-    ].join('');
-  } else if (!docs || !docs.length) {
-    docsHtml = '<div class="doc dim">（这个任务还没有任何 markdown 文档）</div>';
-  } else {
-    const sel = docs.find(d => d.name === state.docSel) || docs[0];
-    state.docSel = sel.name;
-    const tabs = docs.map(d =>
-      `<button type="button" class="dtab${d.name === sel.name ? ' on' : ''}" data-doc="${esc(d.name)}">${esc(d.label)}</button>`
-    ).join('');
-    docsHtml = `
-      <div class="dtabs">${tabs}</div>
-      <div class="doc">${mdRender(sel.content)}</div>`;
-  }
   /* 约束规范展示（Trellis 0.7 动态 Spec paths 命中 + 显式 specRefs） */
   let governingHtml = '';
   const projSpecs = (t.project && state.specsByProject[t.project]) || [];
+  let matchedSpecs = [];
   if (projSpecs.length) {
-    const matchedSpecs = projSpecs.filter(s => {
+    matchedSpecs = projSpecs.filter(s => {
       if ((t.specRefs || []).some(r => r === s.path || r.endsWith(s.path))) return true;
       if (s.paths && s.paths.length) {
         return (t.fileRefs || []).some(f => s.paths.some(p => globMatch(p, f)));
       }
       return false;
     });
-    if (matchedSpecs.length) {
-      governingHtml = `<div class="governing-specs">
-        <div class="b-label">约束规范 · ${matchedSpecs.length}</div>
-        <div class="governing-specs-chips">${matchedSpecs.map(s =>
-          `<span class="governing-spec-chip" title="${esc(s.path)}${s.paths && s.paths.length ? `&#10;约束: ${esc(s.paths.join(', '))}` : ''}">${esc(s.name)}</span>`
-        ).join('')}</div>
-      </div>`;
+  }
+
+  /* 检查当前是否选中了某个规范进行就地预览 */
+  let activeSpec = null;
+  if (state.docSel && state.docSel.startsWith('spec:')) {
+    const specPath = state.docSel.slice(5);
+    activeSpec = matchedSpecs.find(s => s.path === specPath)
+      || projSpecs.find(s => s.path === specPath);
+    if (!activeSpec) {
+      /* 规范已不可用：退回进入预览前的文档，而不是回到第一个标签 */
+      state.docSel = state.specReturnDoc || null;
+      state.specReturnDoc = null;
     }
+  }
+
+  const restoreDocName = () => {
+    const prev = state.specReturnDoc;
+    if (prev && docs && docs.some(d => d.name === prev)) return prev;
+    return docs && docs[0] ? docs[0].name : null;
+  };
+
+  /* 标签/规范切换快速路径：原地切换面板显隐与激活态，0 DOM重建，0 重排，不重测窗口高度 */
+  if (isTabSwitch && back.querySelector('.b-pane')) {
+    back.querySelectorAll('.governing-spec-chip').forEach(btn => {
+      const isActive = activeSpec && activeSpec.path === btn.dataset.specPath;
+      btn.classList.toggle('on', !!isActive);
+      btn.setAttribute('aria-pressed', String(!!isActive));
+      const statusSpan = btn.querySelector('.spec-chip-status');
+      if (isActive && !statusSpan) {
+        btn.insertAdjacentHTML('beforeend', '<span class="spec-chip-status" aria-hidden="true">预览中</span>');
+      } else if (!isActive && statusSpan) {
+        statusSpan.remove();
+      }
+    });
+
+    const selName = activeSpec ? null : ((docs && docs.find(d => d.name === state.docSel)) || (docs && docs[0]) || {}).name;
+    back.querySelectorAll('.dtab').forEach(btn => {
+      btn.classList.toggle('on', !activeSpec && btn.dataset.doc === selName);
+    });
+
+    let banner = back.querySelector('.spec-preview-banner');
+    let specPanel = back.querySelector('.doc-spec');
+    if (activeSpec) {
+      const bannerHtml = `
+        <span class="spec-preview-tag">${icon('book-open', 11)} 规范约束</span>
+        <strong class="spec-preview-title">${esc(activeSpec.name)}</strong>
+        <span class="spec-preview-path" title="${esc(activeSpec.path)}">${esc(activeSpec.path)}</span>
+        <button type="button" class="spec-preview-close" data-close-spec aria-label="退出规范预览，返回任务文档" title="退出规范预览，返回任务文档">×</button>`;
+      if (banner) {
+        banner.innerHTML = bannerHtml;
+        banner.hidden = false;
+        const closeBtn = banner.querySelector('[data-close-spec]');
+        if (closeBtn) {
+          closeBtn.onclick = () => {
+            state.docSel = restoreDocName();
+            renderBack(t, docs, false, error, true);
+          };
+        }
+      }
+      if (specPanel) {
+        specPanel.innerHTML = mdRender(activeSpec.content || '（该规范文档暂无内容）');
+        specPanel.hidden = false;
+        specPanel.scrollTop = 0;
+      }
+      back.querySelectorAll('.doc-panel').forEach(p => { p.hidden = true; });
+    } else {
+      if (banner) {
+        banner.hidden = true;
+        banner.innerHTML = '';
+      }
+      if (specPanel) {
+        specPanel.hidden = true;
+      }
+      back.querySelectorAll('.doc-panel').forEach(p => {
+        p.hidden = (p.dataset.docName !== selName);
+      });
+    }
+    return;
+  }
+
+  if (matchedSpecs.length) {
+    governingHtml = `<div class="governing-specs">
+      <div class="b-label">约束规范 · ${matchedSpecs.length}</div>
+      <div class="governing-specs-chips">${matchedSpecs.map(s => {
+        const isActive = activeSpec && activeSpec.path === s.path;
+        return `<button type="button" class="governing-spec-chip${isActive ? ' on' : ''}" data-spec-path="${esc(s.path)}" aria-pressed="${isActive}" title="${esc(s.path)}${s.paths && s.paths.length ? `&#10;约束: ${esc(s.paths.join(', '))}` : ''}&#10;点击在下方预览规范文档">
+          <span class="spec-chip-icon" aria-hidden="true">${icon('book-open', 11)}</span>
+          <span>${esc(s.name)}</span>
+          ${isActive ? '<span class="spec-chip-status" aria-hidden="true">预览中</span>' : ''}
+        </button>`;
+      }).join('')}</div>
+    </div>`;
+  }
+
+  /* 文档标签与主体：若有选中的约束规范，优先就地渲染该规范并保持原有 tabs 可点击切换回 */
+  const hasHistory = state.navHistory && state.navHistory.length > 0;
+  const lastHist = hasHistory ? state.navHistory[state.navHistory.length - 1] : null;
+  const histBannerHtml = lastHist ? `
+    <div class="nav-history-banner">
+      <button type="button" class="nav-history-back" data-nav-back title="返回上一个任务: ${esc(lastHist.task.title || lastHist.task.id)} (${esc(lastHist.docSel || '文档')})">
+        <span class="nav-history-icon" aria-hidden="true">${icon('arrow-left', 11)}</span>
+        <span class="nav-history-label">返回来源:</span>
+        <strong class="nav-history-title">${esc(lastHist.task.title || lastHist.task.id)}</strong>
+        ${lastHist.docSel ? `<span class="nav-history-doc">(${esc(lastHist.docSel)})</span>` : ''}
+      </button>
+      <button type="button" class="nav-history-close" data-dismiss-nav-history aria-label="关闭来源提示" title="关闭来源提示">×</button>
+    </div>` : '';
+
+  let docsHtml = '';
+  if (loading) {
+    docsHtml = `${histBannerHtml}<div class="doc dim">文档加载中…</div>`;
+  } else if (error) {
+    docsHtml = [
+      histBannerHtml,
+      '<div class="doc dim">',
+      '<p>文档读取失败：' + esc(error) + '</p>',
+      '<button type="button" class="mini" data-retry-doc>重新加载</button>',
+      '</div>',
+    ].join('');
+  } else if (!docs || !docs.length) {
+    docsHtml = `${histBannerHtml}<div class="doc dim">（这个任务还没有任何 markdown 文档）</div>`;
+  } else {
+    const sel = (activeSpec ? null : docs.find(d => d.name === state.docSel)) || docs[0];
+    if (!activeSpec) state.docSel = sel.name;
+    const tabs = docs.map(d =>
+      `<button type="button" class="dtab${!activeSpec && d.name === sel.name ? ' on' : ''}" data-doc="${esc(d.name)}">${esc(d.label)}</button>`
+    ).join('');
+    const specBannerHtml = `
+      <div class="spec-preview-banner"${activeSpec ? '' : ' hidden'}>
+        ${activeSpec ? `
+          <span class="spec-preview-tag">${icon('book-open', 11)} 规范约束</span>
+          <strong class="spec-preview-title">${esc(activeSpec.name)}</strong>
+          <span class="spec-preview-path" title="${esc(activeSpec.path)}">${esc(activeSpec.path)}</span>
+          <button type="button" class="spec-preview-close" data-close-spec aria-label="退出规范预览，返回任务文档" title="退出规范预览，返回任务文档">×</button>` : ''}
+      </div>`;
+    const specPanelHtml = `
+      <div class="doc doc-spec"${activeSpec ? '' : ' hidden'}>${activeSpec ? mdRender(activeSpec.content || '（该规范文档暂无内容）') : ''}</div>`;
+    const docPanelsHtml = docs.map(d => {
+      const isCur = !activeSpec && d.name === sel.name;
+      return `<div class="doc doc-panel" data-doc-name="${esc(d.name)}"${isCur ? '' : ' hidden'}>${mdRender(d.content)}</div>`;
+    }).join('');
+    docsHtml = `
+      ${histBannerHtml}
+      ${tabs ? `<div class="dtabs">${tabs}</div>` : ''}
+      ${specBannerHtml}
+      ${specPanelHtml}
+      ${docPanelsHtml}`;
   }
   const detailMetrics = metricTags(t);
   const inspectMode = state.evidenceTarget && keyOf(state.evidenceTarget) === keyOf(t) ? 'evidence' : 'detail';
@@ -2006,8 +2203,22 @@ function renderBack(t, docs, loading, error) {
         <div class="runtime-back-activity">${esc(rt.activity || '暂无活动摘要')}</div>
         <ul id="runtime-timeline" class="runtime-timeline">${runtimeTrail}</ul>
       </div>` : '';
+  const backFlipBar = `
+    <div class="back-topbar">
+      <button type="button" class="card-flip-pill back-flip-pill" id="btnBackFlip" title="返回任务卡片 (快捷键 F 或 Esc)" aria-label="返回任务正面">
+        <svg class="lucide flip-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-arrow-left"/></svg>
+        <span class="flip-pill-text">返回卡片</span>
+        <kbd class="flip-kbd">Esc</kbd>
+      </button>
+      <button type="button" class="card-flip-pill back-refresh-pill" id="btnBackRefresh" title="从磁盘重新读取文档 (快捷键 R)" aria-label="重新读取文档">
+        <svg class="lucide flip-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-refresh"/></svg>
+        <span class="flip-pill-text">重载文档</span>
+        <kbd class="flip-kbd">R</kbd>
+      </button>
+    </div>`;
   back.innerHTML = `
     <div class="b-pane">
+      ${backFlipBar}
       ${inspectHeader}
       ${detailStatus}
       ${artsMini(t)}
@@ -2016,11 +2227,65 @@ function renderBack(t, docs, loading, error) {
       ${runtimeEvidence}
       ${docsHtml}
     </div>`;
-  /* 标签切换：直接从缓存取，无网络往返 */
+  /* 背面返回药丸：一键返回任务正面 */
+  const backFlipBtn = back.querySelector('#btnBackFlip');
+  if (backFlipBtn) {
+    backFlipBtn.onclick = (e) => {
+      e.stopPropagation();
+      toggleFlip(false);
+    };
+  }
+  /* 背面重载药丸：从磁盘重新读取最新文档 */
+  const backRefreshBtn = back.querySelector('#btnBackRefresh');
+  if (backRefreshBtn) {
+    backRefreshBtn.onclick = (e) => {
+      e.stopPropagation();
+      manualRefresh();
+    };
+  }
+  /* 导航历史返回按钮：退回跳转前的来源任务与文档 */
+  const backNavBtn = back.querySelector('[data-nav-back]');
+  if (backNavBtn) {
+    backNavBtn.onclick = () => {
+      goBackNavHistory();
+    };
+  }
+  /* 关闭导航历史条 */
+  const dismissNavBtn = back.querySelector('[data-dismiss-nav-history]');
+  if (dismissNavBtn) {
+    dismissNavBtn.onclick = () => {
+      state.navHistory = [];
+      const banner = back.querySelector('.nav-history-banner');
+      if (banner) banner.remove();
+      scheduleWindowFit();
+    };
+  }
+  /* 约束规范芯片点击：就地在下方文档区预览规范内容，再次点击切回原文档 */
+  back.querySelectorAll('.governing-spec-chip').forEach(btn => {
+    btn.onclick = () => {
+      const specPath = btn.dataset.specPath;
+      if (state.docSel === 'spec:' + specPath) {
+        state.docSel = restoreDocName();
+      } else {
+        if (!String(state.docSel || '').startsWith('spec:')) state.specReturnDoc = state.docSel;
+        state.docSel = 'spec:' + specPath;
+      }
+      renderBack(t, docs, false, error, true);
+    };
+  });
+  /* 规范预览条关闭按钮：退出规范预览，回到进入前的文档标签 */
+  const closeSpecBtn = back.querySelector('[data-close-spec]');
+  if (closeSpecBtn) {
+    closeSpecBtn.onclick = () => {
+      state.docSel = restoreDocName();
+      renderBack(t, docs, false, error, true);
+    };
+  }
+  /* 标签切换：直接从缓存取，无网络往返，零延迟切 tab */
   back.querySelectorAll('.dtab').forEach(btn => {
     btn.onclick = () => {
       state.docSel = btn.dataset.doc;
-      renderBack(t, docs, false, error);
+      renderBack(t, docs, false, error, true);
     };
   });
   /* 重新加载：清除带 error 的缓存再取，保留任务上下文 */
@@ -2028,8 +2293,13 @@ function renderBack(t, docs, loading, error) {
   if (retry) {
     retry.onclick = () => {
       state.prdCache = null;
-      loadBack(t);
+      mdCache.clear();
+      loadBack(t, { force: true });
     };
+  }
+  if (savedScrollTop !== null) {
+    const nextActiveDoc = back.querySelector('.doc-panel:not([hidden]), .doc-spec:not([hidden])');
+    if (nextActiveDoc) nextActiveDoc.scrollTop = savedScrollTop;
   }
   scheduleWindowFit();   /* 文档高度变化（含异步加载完成、切标签）后重对齐窗口 */
 }
@@ -2045,19 +2315,46 @@ if (typeof marked !== 'undefined') {
         token.text = escHtml(token.text);
       }
     },
+    renderer: {
+      code(codeOrToken, infoString, escaped) {
+        let codeText = '';
+        let lang = '';
+        if (typeof codeOrToken === 'object' && codeOrToken !== null) {
+          codeText = codeOrToken.text || '';
+          lang = codeOrToken.lang || '';
+        } else {
+          codeText = String(codeOrToken || '');
+          lang = String(infoString || '');
+        }
+        const langClass = lang ? ` class="language-${escHtml(lang)}"` : '';
+        return `<div class="doc-code-block"><button type="button" class="pre-copy-btn" aria-label="复制代码" title="复制代码">${icon('copy', 11)}<span>复制</span></button><pre><code${langClass}>${escaped ? codeText : escHtml(codeText)}\n</code></pre></div>`;
+      },
+    },
   });
 }
+const mdCache = new Map();
 function mdRender(src, foldH2 = true) {
   const source = String(src || '');
   if (!window.marked) return escHtml(source); // vendor 未加载时的安全兜底
+  const cacheKey = (foldH2 ? '1:' : '0:') + source;
+  const hit = mdCache.get(cacheKey);
+  if (hit !== undefined) return hit;
   const html = marked.parse(source);
   /* 按 <h2> 切分重组进折叠分区（替代原 parser 内嵌状态机）：
      h2 及后续内容进 <details class="doc-section">；h2 之前的头部内容原样保留。
      foldH2=false：连续渲染（短预览用，如规范卡片），不切折叠分区。 */
-  if (!foldH2) return html;
+  if (!foldH2) {
+    if (mdCache.size > 120) mdCache.clear();
+    mdCache.set(cacheKey, html);
+    return html;
+  }
   const h2Re = /<h2[^>]*>[\s\S]*?<\/h2>/g;
   const matches = html.match(h2Re) || [];
-  if (!matches.length) return html;
+  if (!matches.length) {
+    if (mdCache.size > 120) mdCache.clear();
+    mdCache.set(cacheKey, html);
+    return html;
+  }
   const out = [];
   let cursor = 0;
   for (const match of matches) {
@@ -2079,7 +2376,177 @@ function mdRender(src, foldH2 = true) {
     }
   }
   if (cursor < html.length) out.push(html.slice(cursor));
-  return out.join('');
+  const res = out.join('');
+  if (mdCache.size > 120) mdCache.clear();
+  mdCache.set(cacheKey, res);
+  return res;
+}
+function getAllKnownTasks() {
+  const all = [];
+  for (const bucket of Object.values(state.tasksByProject)) {
+    if (bucket) all.push(...bucketAllTasks(bucket));
+  }
+  return all;
+}
+
+function resolvePath(base, rel) {
+  if (!rel) return base || '';
+  if (rel.startsWith('/')) return rel;
+  const normBase = base ? base.replace(/\\/g, '/') : '';
+  const normRel = rel.replace(/\\/g, '/');
+  const baseParts = normBase.split('/').filter(Boolean);
+  const relParts = normRel.split('/').filter(Boolean);
+  for (const part of relParts) {
+    if (part === '.') continue;
+    if (part === '..') {
+      if (baseParts.length > 0) baseParts.pop();
+    } else {
+      baseParts.push(part);
+    }
+  }
+  const prefix = normBase.startsWith('/') ? '/' : '';
+  return prefix + baseParts.join('/');
+}
+
+async function handleLinkNavigation(rawHref) {
+  if (!rawHref) return;
+  const href = rawHref.trim();
+  if (href.startsWith('javascript:')) return;
+
+  /* 1. 锚点跳转：滚动到对应小节，展开折叠的 details */
+  if (href.startsWith('#')) {
+    const rawId = href.slice(1);
+    if (!rawId) return;
+    const curDoc = document.querySelector('.doc:not([hidden])');
+    if (curDoc) {
+      let el = null;
+      try {
+        el = curDoc.querySelector(`#${CSS.escape(rawId)}, [name="${CSS.escape(rawId)}"]`);
+      } catch { /* 忽略特殊字符选择器异常 */ }
+      if (!el) {
+        const decoded = decodeURIComponent(rawId).toLowerCase();
+        el = Array.from(curDoc.querySelectorAll('h1, h2, h3, h4, h5, h6, summary')).find(h =>
+          h.textContent.trim().toLowerCase() === decoded
+        );
+      }
+      if (el) {
+        const details = el.closest('details');
+        if (details && !details.open) details.open = true;
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+    return;
+  }
+
+  /* 2. 外部链接：通过系统默认浏览器打开 */
+  if (/^(https?:|mailto:|vscode:|cursor:)/i.test(href)) {
+    try {
+      await call('open_url', { url: href });
+    } catch (err) {
+      toast(`打开链接失败: ${err}`);
+    }
+    return;
+  }
+
+  /* 3. 本地路径解析 */
+  const cleanPath = href.replace(/^file:\/\//, '');
+  const t = currentFocus();
+  const projPath = t ? (t.projectPath || (state.projects.find(p => p.name === t.project) || {}).path) : null;
+  const taskBaseDir = (t && projPath)
+    ? `${projPath}/.trellis/tasks/${t.dir || t.id}`
+    : (projPath || '');
+
+  const fullPath = taskBaseDir ? resolvePath(taskBaseDir, cleanPath) : cleanPath;
+
+  /* 4. 尝试匹配 Trellis 任务（方案 1：优先应用内跳转） */
+  const trellisTasksMarker = '/.trellis/tasks/';
+  const markerIdx = fullPath.indexOf(trellisTasksMarker);
+  let targetTaskId = null;
+  let targetDocName = null;
+
+  if (markerIdx !== -1) {
+    const sub = fullPath.slice(markerIdx + trellisTasksMarker.length);
+    const parts = sub.split('/').filter(Boolean);
+    if (parts.length > 0) {
+      if (parts[0] === 'archive' && parts.length >= 3) {
+        targetTaskId = parts[2];
+        if (parts[3] && parts[3].endsWith('.md')) targetDocName = parts[3];
+      } else {
+        targetTaskId = parts[0];
+        if (parts[1] && parts[1].endsWith('.md')) targetDocName = parts[1];
+      }
+    }
+  }
+
+  if (targetTaskId) {
+    let matched = getAllKnownTasks().find(x =>
+      x.id === targetTaskId ||
+      x.dir === targetTaskId ||
+      (x.dir && x.dir.endsWith('/' + targetTaskId))
+    );
+    // 若尚未加载归档任务，尝试按需加载后再查
+    if (!matched && t && t.project) {
+      try {
+        await ensureArchived(t.project);
+        matched = getAllKnownTasks().find(x =>
+          x.id === targetTaskId ||
+          x.dir === targetTaskId ||
+          (x.dir && x.dir.endsWith('/' + targetTaskId))
+        );
+      } catch { /* 忽略加载归档失败 */ }
+    }
+    if (matched) {
+      const isCurrent = t && (keyOf(t) === keyOf(matched));
+      if (!isCurrent && t) {
+        if (!state.navHistory) state.navHistory = [];
+        const curDocEl = document.querySelector('.doc:not([hidden])');
+        state.navHistory.push({
+          task: t,
+          docSel: state.docSel,
+          scrollTop: curDocEl ? curDocEl.scrollTop : 0,
+        });
+        if (state.navHistory.length > 10) state.navHistory.shift();
+      }
+      focusTask(matched, true);
+      if (targetDocName) {
+        state.docSel = targetDocName;
+      }
+      if (state.flipped) {
+        loadBack(matched);
+      }
+      toast(isCurrent ? `已切换文档: ${targetDocName || '默认'}` : `已跳转至任务: ${matched.title || matched.id}`);
+      return;
+    }
+  }
+
+  /* 5. 未匹配到任务（或为本地项目文件）：在系统默认编辑器中打开 */
+  try {
+    await call('open_path', { path: fullPath });
+  } catch (err) {
+    toast(String(err || `无法打开文件: ${cleanPath}`));
+  }
+}
+
+function goBackNavHistory() {
+  if (!state.navHistory || !state.navHistory.length) return;
+  const prev = state.navHistory.pop();
+  if (!prev || !prev.task) return;
+  focusTask(prev.task, true);
+  if (prev.docSel) {
+    state.docSel = prev.docSel;
+  }
+  if (state.flipped) {
+    loadBack(prev.task);
+  }
+  if (prev.scrollTop) {
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        const curDoc = document.querySelector('.doc:not([hidden])');
+        if (curDoc) curDoc.scrollTop = prev.scrollTop;
+      }, 60);
+    });
+  }
+  toast(`已返回任务: ${prev.task.title || prev.task.id}`);
 }
 
 /* ---------- 层级树面板 ---------- */
@@ -2109,7 +2576,7 @@ function renderTree(focused) {
     for (const t of un) {
       if ((KIND_URGENCY[t.kind] ?? 9) < (KIND_URGENCY[best] ?? 9)) best = t.kind;
     }
-    const c = un.length ? (KIND_COLOR[best] || '#a6a7ae') : '#63656e';
+    const c = un.length ? (KIND_COLOR[best] || '#a6a7ae') : '#8a8d9b';
     const head = document.createElement('div');
     head.className = 'proj-h';
     head.innerHTML = `<span class="d" style="background:${c};color:${c}"></span>${esc(name)}<span class="cnt">${shown.length}</span>`;
@@ -2388,7 +2855,7 @@ function renderRelations(focused) {
     const statusColor = t.status === 'completed' || t.status === 'done' ? '#45c4a0'
       : t.status === 'in_progress' ? '#f0a35e'
       : t.status === 'blocked' || t.status === 'failed' ? '#f07178'
-      : t.status === 'planning' ? '#8b7cf6' : '#63656e';
+      : t.status === 'planning' ? '#8b7cf6' : '#8a8d9b';
     const pct = Math.round((t.progress || 0) * 100);
     const rt = state.runtimeByTask.get(keyOf(t));
     const active = rt && rt.agent && rt.agent.state && rt.agent.state !== 'none' && rt.agent.state !== 'idle';
@@ -2641,7 +3108,7 @@ function renderRelations(focused) {
         html += `<div class="rel-board-group${isDoneGroup ? ' done-group' : ''}">
           <div class="rel-board-group-h rel-board-group-toggle" data-group="${esc(gKey)}" title="展开/收起">
             <span class="rel-board-caret">${collapsed ? '▸' : '▾'}</span>
-            <span class="rel-board-group-dot" style="background:${g.parent.archived ? '#63656e' : isDoneGroup ? '#45c4a0' : '#f0a35e'}"></span>
+            <span class="rel-board-group-dot" style="background:${g.parent.archived ? '#8a8d9b' : isDoneGroup ? '#45c4a0' : '#f0a35e'}"></span>
             <span class="rel-board-group-name" title="${esc(g.parent.title || g.parent.id)}">${esc((g.parent.title || g.parent.id).slice(0, 40))}</span>
             <span class="rel-board-group-count">${g.kids.length} 子任务${isDoneGroup ? '' : ` · ${pct}%`}</span>
           </div>
@@ -2673,7 +3140,7 @@ function renderRelations(focused) {
           { key: '3d', label: '三天内', max: 3 * DAY, color: '#8b7cf6' },
           { key: '7d', label: '七天内', max: 7 * DAY, color: '#4aa3ff' },
           { key: '30d', label: '一个月内', max: 30 * DAY, color: '#f0a35e' },
-          { key: 'older', label: '更早', max: Infinity, color: '#63656e' },
+          { key: 'older', label: '更早', max: Infinity, color: '#8a8d9b' },
         ];
         const inBucket = (t, b) => {
           const age = Math.max(0, now - taskLastTs(t));
@@ -2800,7 +3267,7 @@ function renderRelations(focused) {
   });
 }
 
-function focusTask(t) {
+function focusTask(t, preserveNavHistory = false) {
   state.archiveReceipt = null;
   state.focusKey = keyOf(t);
   state.focusMode = 'manual';
@@ -2808,6 +3275,12 @@ function focusTask(t) {
   clearRuntimeUnread();
   state.treeOpen = false;
   state.subOpen = null;
+  state.docSel = null;
+  state.specReturnDoc = null;
+  if (!preserveNavHistory) {
+    state.navHistory = [];
+  }
+  mdCache.clear();
   /* 从关联画布点任务：恢复进入前的高度，不要再跑内容 fit 把窗口收短。 */
   if (state.relOpen || document.body.classList.contains('rel-canvas')) {
     leaveRelationsCanvas();
@@ -2841,7 +3314,8 @@ function toggleAutoFollow() {
 /* ---------- 胶囊：灵动岛紧凑态 + 展开态 ---------- */
 let lastCapRuntimeState = null;
 let lastCapsuleWindowExpanded = null;
-let capCapCollapseT = null;   /* pointerout 收起防抖定时器 */
+let capExpandTimer = null;    /* pointerenter 展开意图防抖定时器 (220ms) */
+let capCollapseTimer = null;  /* pointerleave 收起缓冲定时器 (200ms) */
 let capsuleWindowResizeChain = Promise.resolve();
 let modeTransitioning = false;
 function syncCapsuleWindow() {
@@ -2878,7 +3352,8 @@ function renderCapsule(t, projectActivity) {
   if (!show) {
     cap.classList.remove('is-expanded', 'menu-open');
     lastCapsuleWindowExpanded = null;
-    if (capCapCollapseT) { clearTimeout(capCapCollapseT); capCapCollapseT = null; }
+    if (capExpandTimer) { clearTimeout(capExpandTimer); capExpandTimer = null; }
+    if (capCollapseTimer) { clearTimeout(capCollapseTimer); capCollapseTimer = null; }
     const pop = $('capMenuPop');
     if (pop) pop.hidden = true;
     const btn = $('btnCapMenu');
@@ -3103,7 +3578,10 @@ async function toggleCapMenu(force) {
      菜单 pop 要等窗口真正到 136px 后再显示，避免被 40px 紧凑窗口裁切。 */
   if (cap) {
     cap.classList.toggle('menu-open', target);
-    if (target && capCapCollapseT) { clearTimeout(capCapCollapseT); capCapCollapseT = null; }
+    if (target) {
+      if (capExpandTimer) { clearTimeout(capExpandTimer); capExpandTimer = null; }
+      if (capCollapseTimer) { clearTimeout(capCollapseTimer); capCollapseTimer = null; }
+    }
   }
   syncCapsuleWindow();
   btn.classList.toggle('on', target);
@@ -3124,8 +3602,20 @@ async function toggleCapMenu(force) {
       setTimeout(() => moveFocusInto(pop), 50);
     }
   } else {
+    /* 只在焦点位于菜单内时回焦，避免外部点击后焦点被抢回胶囊。
+       回焦后若胶囊内已无焦点且指针不在其上，一并收起预览展开态。 */
+    const hadFocus = pop.contains(document.activeElement);
     pop.hidden = true;
-    restoreFocus();
+    if (hadFocus) restoreFocus();
+    else focusReturnTo = null;
+    if (cap
+        && !cap.classList.contains('menu-open')
+        && !cap.matches(':hover')
+        && !cap.contains(document.activeElement)) {
+      if (capCollapseTimer) { clearTimeout(capCollapseTimer); capCollapseTimer = null; }
+      cap.classList.remove('is-expanded');
+      syncCapsuleWindow();
+    }
   }
 }
 async function openUnreadFromCapsule() {
@@ -3398,7 +3888,7 @@ function renderAdmin() {
   for (const r of state.roots) {
     const row = document.createElement('div');
     row.className = 'adm-row';
-    row.innerHTML = `<div class="adm-info"><div class="adm-path" style="font-size:9.5px;color:var(--mist)">${esc(r)}</div></div>`;
+    row.innerHTML = `<div class="adm-info"><div class="adm-path" style="font-size:var(--text-sub);color:var(--mist)">${esc(r)}</div></div>`;
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'mini danger-mini';
@@ -3794,6 +4284,11 @@ async function onTasksChanged({ urgent = false, project = null } = {}) {
   }
   /* 仅当 reveal/new-task 或归档刷新实际改动了状态时补充 render；否则 refresh 内部已渲染。 */
   if ((focusMutated || state.showArchived) && state.view === 'main') render();
+  /* 卡片处于背面时，文档变更后自动后台静默重校验并热重载 */
+  if (state.flipped && state.view === 'main') {
+    const cur = state.evidenceTarget || currentFocus();
+    if (cur) revalidateBack(cur);
+  }
 }
 function bindWatch() {
   if (!hasTauri || !window.__TAURI__.event) return;
@@ -3959,12 +4454,23 @@ function syncMenuChrome() {
     const mark = top.querySelector('i');
     if (mark) mark.textContent = state.alwaysOnTop ? '开' : '关';
   }
+  const quickTop = $('btnQuickTop');
+  if (quickTop) {
+    quickTop.classList.toggle('on', !!state.alwaysOnTop);
+    quickTop.setAttribute('aria-pressed', String(!!state.alwaysOnTop));
+    quickTop.title = state.alwaysOnTop ? '取消置顶' : '始终置顶 (Pin)';
+  }
   const adm = $('btnAdmin');
   if (adm) adm.setAttribute('aria-expanded', String(!!state.adminOpen));
   const treeBtn = $('btnTree');
   if (treeBtn) {
     treeBtn.classList.toggle('on', !!state.treeOpen);
     treeBtn.setAttribute('aria-expanded', String(!!state.treeOpen));
+  }
+  const relBtn = $('btnRelations');
+  if (relBtn) {
+    relBtn.classList.toggle('on', !!state.relOpen);
+    relBtn.setAttribute('aria-expanded', String(!!state.relOpen));
   }
   syncThemeChrome();
 }
@@ -4025,6 +4531,10 @@ function bindUI() {
   $('btnCapsule').onclick = () => { toggleMenu(false); setMode('capsule'); };
   $('btnAutoFollow').onclick = () => { toggleAutoFollow(); syncMenuChrome(); };
   $('btnTop').onclick = () => { toggleTop().then(() => syncMenuChrome()); };
+  const quickTop = $('btnQuickTop');
+  if (quickTop) quickTop.onclick = () => { toggleTop().then(() => syncMenuChrome()); };
+  const quickCapsule = $('btnQuickCapsule');
+  if (quickCapsule) quickCapsule.onclick = () => { toggleMenu(false); setMode('capsule'); };
   $('btnAdmin').onclick = () => { toggleMenu(false); toggleAdmin(); };
   if ($('btnAdminClose')) $('btnAdminClose').onclick = () => closeAdmin();
   if ($('btnTreeClose')) $('btnTreeClose').onclick = () => closeTree();
@@ -4046,7 +4556,6 @@ function bindUI() {
     };
   }
   $('btnHide').onclick = () => { toggleMenu(false); hideWindow(); };
-  $('btnFlip').onclick = () => { toggleMenu(false); closeProjectPop(); toggleFlip(); };
   $('btnMenu').onclick = (e) => { e.stopPropagation(); toggleMenu(); };
   $('btnTheme').onclick = (e) => {
     e.preventDefault();
@@ -4066,29 +4575,50 @@ function bindUI() {
   if (capBody) {
     const cap = $('capsule');
     if (cap) {
-      const expand = () => {
-        if (capCapCollapseT) { clearTimeout(capCapCollapseT); capCapCollapseT = null; }
-        cap.classList.add('is-expanded');
-        syncCapsuleWindow();
+      const handlePointerEnter = () => {
+        if (capCollapseTimer) { clearTimeout(capCollapseTimer); capCollapseTimer = null; }
+        if (cap.classList.contains('is-expanded')) return;
+        /* 220ms 意图延时防抖：鼠标快速划过（>400px/s 掠过耗时 <100ms）不触发展开与窗口 resize */
+        if (capExpandTimer) clearTimeout(capExpandTimer);
+        capExpandTimer = setTimeout(() => {
+          capExpandTimer = null;
+          cap.classList.add('is-expanded');
+          syncCapsuleWindow();
+        }, 220);
       };
-      const collapseIfOutside = (e) => {
+
+      const handlePointerLeave = (e) => {
+        /* 离开时立即取消尚未触发的展开意图计时器（掠过防抖核心） */
+        if (capExpandTimer) { clearTimeout(capExpandTimer); capExpandTimer = null; }
         if (cap.classList.contains('menu-open')) return;   /* 菜单打开期间锁定展开态 */
         if (e.relatedTarget && cap.contains(e.relatedTarget)) return;
-        /* 120ms 防抖：指针短暂扫过边缘不触发收起抖动（窗口 resize 抖动） */
-        if (capCapCollapseT) clearTimeout(capCapCollapseT);
-        capCapCollapseT = setTimeout(() => {
-          capCapCollapseT = null;
+
+        /* 200ms 防抖缓冲区：指针短暂离开边缘不触发抖动 */
+        if (capCollapseTimer) clearTimeout(capCollapseTimer);
+        capCollapseTimer = setTimeout(() => {
+          capCollapseTimer = null;
           cap.classList.remove('is-expanded');
           syncCapsuleWindow();
-        }, 120);
+        }, 200);
       };
-      cap.addEventListener('pointerover', expand);
-      cap.addEventListener('pointerout', collapseIfOutside);
-      cap.addEventListener('focusin', expand);
+
+      const expandImmediate = () => {
+        if (capCollapseTimer) { clearTimeout(capCollapseTimer); capCollapseTimer = null; }
+        if (capExpandTimer) { clearTimeout(capExpandTimer); capExpandTimer = null; }
+        if (!cap.classList.contains('is-expanded')) {
+          cap.classList.add('is-expanded');
+          syncCapsuleWindow();
+        }
+      };
+
+      cap.addEventListener('pointerenter', handlePointerEnter);
+      cap.addEventListener('pointerleave', handlePointerLeave);
+      cap.addEventListener('focusin', expandImmediate);
       cap.addEventListener('focusout', (e) => {
         if (cap.classList.contains('menu-open')) return;   /* 菜单打开期间锁定展开态 */
         requestAnimationFrame(() => {
           if (!cap.contains(document.activeElement) && !(e.relatedTarget && cap.contains(e.relatedTarget))) {
+            if (capExpandTimer) { clearTimeout(capExpandTimer); capExpandTimer = null; }
             cap.classList.remove('is-expanded');
             syncCapsuleWindow();
           }
@@ -4178,10 +4708,54 @@ function bindUI() {
     const capPop = $('capMenuPop');
     if (capPop && !capPop.hidden && !e.target.closest('#capMenuPop, #btnCapMenu')) toggleCapMenu(false);
   });
+  /* 全局拦截所有 <a> 标签点击：防御 WKWebView 默认页面导航（防止白屏崩溃） */
+  document.addEventListener('click', (e) => {
+    const link = e.target.closest('a');
+    if (!link) return;
+    const href = link.getAttribute('href');
+    if (!href || href === '#' || href.startsWith('javascript:')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    handleLinkNavigation(href);
+  });
+  /* 代码块一键复制按钮点击处理 */
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.pre-copy-btn');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const wrapper = btn.closest('.doc-code-block') || btn.closest('pre');
+    if (!wrapper) return;
+    const code = wrapper.querySelector('code');
+    const text = (code ? (code.textContent || code.innerText) : (wrapper.querySelector('pre') || wrapper).textContent || '').replace(/\n$/, '');
+    if (!text) return;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      btn.classList.add('copied');
+      btn.innerHTML = `${icon('check', 11)}<span>已复制</span>`;
+      setTimeout(() => {
+        btn.classList.remove('copied');
+        btn.innerHTML = `${icon('copy', 11)}<span>复制</span>`;
+      }, 1500);
+    } catch {
+      toast('复制失败');
+    }
+  });
   /* 点击卡片空白区翻面；避让顶栏/菜单/sheet */
   $('flip').addEventListener('click', (e) => {
     if (state.mode !== 'card' || state.treeOpen || state.adminOpen || state.menuOpen) return;
-    if (e.target.closest('.subs, button, a, details, .doc, .runtime-evidence, .arts-mini, .dtabs, .sheet, .dragbar, input, .card-topbar, .menu-pop, .project-pop, .excerpt')) return;
+    if (e.target.closest('.subs, button, a, details, .doc, .runtime-evidence, .arts-mini, .dtabs, .sheet, input, .card-unified-header, .menu-pop, .project-pop, .excerpt')) return;
     toggleFlip();
   });
 
@@ -4221,6 +4795,22 @@ function bindUI() {
     }
 
     if (e.target && ['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+    /* 快捷键：Alt+ArrowLeft 或 Cmd/Ctrl+[ 返回跳转前来源任务 */
+    if (state.navHistory && state.navHistory.length > 0) {
+      if ((e.altKey && e.key === 'ArrowLeft') || ((e.metaKey || e.ctrlKey) && e.key === '[')) {
+        e.preventDefault();
+        goBackNavHistory();
+        return;
+      }
+    }
+    /* 快捷键：Cmd+R / Ctrl+R 手动刷新（覆盖原生 webview 刷新并执行全面重载） */
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'r' || e.key === 'R')) {
+      e.preventDefault();
+      manualRefresh();
+      return;
+    }
+    /* 组合键（如 Cmd+F）交给系统/浏览器，不当作单键快捷键 */
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key;
     if (state.view !== 'main') return;
     if (k === 'Escape') {
@@ -4233,6 +4823,7 @@ function bindUI() {
     if (k === 'l' || k === 'L') toggleTree();
     if (k === 'c' || k === 'C') setMode(state.mode === 'capsule' ? 'card' : 'capsule');
     if (k === 'r' || k === 'R') manualRefresh();
+    if (k === 'f' || k === 'F') toggleFlip();
     if (state.treeOpen && k >= '1' && k <= '9') {
       const t = indexedTasks[Number(k) - 1];
       if (t) focusTask(t);

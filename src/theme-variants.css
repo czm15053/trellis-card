@@ -64,7 +64,7 @@ body[data-theme] .card>.theme-pop{
   box-shadow:0 22px 48px rgba(0,0,0,.42);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)
 }
 .theme-pop-head{display:flex;align-items:baseline;justify-content:space-between;padding:0 2px;color:var(--chalk);font-family:var(--serif);font-size:14px;font-weight:700}
-.theme-pop-head span+span{font-family:var(--mono);font-size:8px;font-weight:600;letter-spacing:.08em;color:var(--dim);text-transform:uppercase}
+.theme-pop-head span+span{font-family:var(--mono);font-size:var(--text-sub);font-weight:600;letter-spacing:.08em;color:var(--dim);text-transform:uppercase}
 .theme-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
 .theme-choice{
   min-width:0;display:grid;grid-template-columns:22px minmax(0,1fr);grid-template-rows:auto auto;column-gap:7px;align-items:center;
@@ -75,7 +75,7 @@ body[data-theme] .card>.theme-pop{
 .theme-choice[aria-pressed="true"]{color:var(--chalk);border-color:color-mix(in srgb,var(--accent) 60%,var(--line2));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 25%,transparent)}
 .theme-swatch{grid-row:1 / span 2;width:22px;height:22px;border-radius:6px;background:var(--swatch-a);border:1px solid color-mix(in srgb,var(--swatch-b) 70%,#fff);box-shadow:inset -7px 0 0 var(--swatch-b),0 2px 5px rgba(0,0,0,.12)}
 .theme-choice-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:700;line-height:1.2}
-.theme-choice-meta{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:7.5px;color:var(--dim);line-height:1.2}
+.theme-choice-meta{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:var(--text-badge);color:var(--dim);line-height:1.2}
 @media (max-width:320px){
   .theme-grid{grid-template-columns:1fr}
   body[data-theme] .card>.theme-pop{left:6px;right:6px}
@@ -83,7 +83,7 @@ body[data-theme] .card>.theme-pop{
 
 /* Native Trellis specimen card: the baseline for all comparisons. */
 body[data-theme="specimen"]{
-  --ink:#08090d;--ink2:#0d0f15;--chalk:#eceae2;--mist:#a6a7ae;--dim:#63656e;
+  --ink:#08090d;--ink2:#0d0f15;--chalk:#eceae2;--mist:#a6a7ae;--dim:#8a8d9b;
   --line:rgba(236,234,226,.07);--line2:rgba(236,234,226,.13);
   --amber:#f0a35e;--violet:#8b7cf6;--mint:#45c4a0;--rose:#f07178;--wrap:#ff8f5a;
   --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
@@ -117,6 +117,7 @@ body[data-theme="swiss"]{
   --ink:#f5f5f2;--ink2:#fff;--chalk:#101010;--mist:#4e4e4e;--dim:#858585;
   --line:rgba(16,16,16,.12);--line2:rgba(16,16,16,.26);
   --amber:#e2463c;--violet:#285aa8;--mint:#16856d;--rose:#b92832;--wrap:#df7b2d;
+  --state-spec:#0958d9;--state-spec-text-on:#0b2b5c;--state-live:var(--mint);--state-live-text:#0d6854;
   --font:Arial,"Helvetica Neue","PingFang SC",sans-serif;--serif:Arial,"Helvetica Neue","PingFang SC",sans-serif;
   --theme-card-bg:#f7f7f4;--theme-card-border:#111;--theme-panel-bg:#eeeeea;
   --theme-control-bg:#fff;--theme-pop-bg:#fafaf7;--theme-rail-bg:#ededE8;--theme-preview-bg:#f0f0eb;
@@ -171,7 +172,7 @@ body[data-theme="sci-fi-hud"]{
 }
 body[data-theme="sci-fi-hud"] .runtime-hero,body[data-theme="sci-fi-hud"] .subs{border-radius:2px;border:1px solid var(--line2)}
 body[data-theme="sci-fi-hud"] .title{font-size:18px;letter-spacing:.03em;text-transform:uppercase}
-body[data-theme="sci-fi-hud"] .card-topbar .iconbtn,body[data-theme="sci-fi-hud"] .proj-chip{border-radius:2px}
+body[data-theme="sci-fi-hud"] .card-unified-header .iconbtn,body[data-theme="sci-fi-hud"] .proj-chip{border-radius:2px}
 
 /* UI-Prompt visual: Neon Cyberpunk. */
 body[data-theme="neon-cyberpunk"]{
@@ -347,7 +348,7 @@ body[data-theme="art-deco"]{
 }
 body[data-theme="art-deco"] .title{letter-spacing:.045em;text-transform:uppercase}
 body[data-theme="art-deco"] .runtime-hero,body[data-theme="art-deco"] .subs{border-color:color-mix(in srgb,var(--amber) 56%,var(--line2));border-radius:1px}
-body[data-theme="art-deco"] .card-topbar .iconbtn,body[data-theme="art-deco"] .proj-chip{border-color:color-mix(in srgb,var(--amber) 48%,var(--line2));border-radius:1px}
+body[data-theme="art-deco"] .card-unified-header .iconbtn,body[data-theme="art-deco"] .proj-chip{border-color:color-mix(in srgb,var(--amber) 48%,var(--line2));border-radius:1px}
 
 /* UI-Prompt retro: Bauhaus. */
 body[data-theme="bauhaus"]{
@@ -368,6 +369,7 @@ body[data-theme="wabi-sabi"]{
   --ink:#e8e1d4;--ink2:#f1eadc;--chalk:#302e29;--mist:#68645a;--dim:#928c7e;
   --line:rgba(48,46,41,.12);--line2:rgba(48,46,41,.23);
   --amber:#b6874c;--violet:#6d747d;--mint:#6b8061;--rose:#a85f57;--wrap:#9d7354;
+  --state-spec:#2e649e;--state-spec-text-on:#17324a;--state-live:var(--mint);--state-live-text:#395436;
   --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;--serif:Georgia,"Songti SC","STSong",serif;
   --theme-card-bg:#ebe4d7;--theme-card-border:#898273;--theme-panel-bg:rgba(255,255,255,.28);
   --theme-control-bg:rgba(242,235,222,.74);--theme-pop-bg:#eee7da;--theme-rail-bg:#e0d8ca;--theme-preview-bg:#eee6d8;
@@ -570,7 +572,7 @@ body[data-theme] .capsule.is-expanded:not(.menu-open) .cap-preview{
   opacity:1;visibility:visible;transform:translateY(0);
   transition-delay:.08s,.06s,0s
 }
-body[data-theme] .cap-preview-top{min-height:14px;padding-right:2px;font-size:9px}
+body[data-theme] .cap-preview-top{min-height:14px;padding-right:2px;font-size:var(--text-sub)}
 body[data-theme] .cap-preview-title{font-family:var(--font);font-size:14px;font-weight:700;letter-spacing:0}
 body[data-theme] .cap-preview-activity{font-size:12px;color:color-mix(in srgb,var(--accent) 50%,var(--mist))}
 body[data-theme] .cap-preview-excerpt{
@@ -660,7 +662,7 @@ body[data-theme] .cap-tool:hover{
 }
 /* 开关状态 pill：开=mint 实底白字，关=白框灰字（明显可读） */
 body[data-theme] .cap-tool.setting i{
-  font-style:normal;font-size:9px;font-weight:700;line-height:16px;
+  font-style:normal;font-size:var(--text-badge);font-weight:700;line-height:16px;
   min-width:24px;text-align:center;border-radius:999px;flex-shrink:0;
   color:rgba(255,255,255,.55);border:1px solid rgba(255,255,255,.18);
   background:rgba(255,255,255,.04)
@@ -745,17 +747,12 @@ body[data-theme="shadcn"]{
 body[data-theme="shadcn"] .setup-card{filter:none;box-shadow:var(--theme-card-shadow)}
 body[data-theme="shadcn"] .grab-led,
 body[data-theme="shadcn"] .observe-head .obs-mark,
-body[data-theme="shadcn"] .grab-meter .ticks i.f,
-body[data-theme="shadcn"] .ticks i.f,
 body[data-theme="shadcn"] .seg.f,
-body[data-theme="shadcn"] .grab-meter .ticks i.c,
-body[data-theme="shadcn"] .ticks i.c,
 body[data-theme="shadcn"] .seg.c,
 body[data-theme="shadcn"] .proj-h .d,
 body[data-theme="shadcn"] .node .d,
 body[data-theme="shadcn"] .rel-tnode-dot,
 body[data-theme="shadcn"] .star i{box-shadow:none}
-body[data-theme="shadcn"] .card-grab:hover{background:transparent}
 body[data-theme="shadcn"] .capsule .orb{box-shadow:none}
 body[data-theme="shadcn"] .capsule .orb.check{box-shadow:none}
 body[data-theme="shadcn"] .capsule:not(.is-expanded):not(.menu-open) .cap-state{text-shadow:none}
@@ -891,18 +888,13 @@ body[data-theme="heroui"]{
 body[data-theme="heroui"] .setup-card{filter:none;box-shadow:var(--theme-card-shadow)}
 body[data-theme="heroui"] .grab-led,
 body[data-theme="heroui"] .observe-head .obs-mark,
-body[data-theme="heroui"] .grab-meter .ticks i.f,
-body[data-theme="heroui"] .ticks i.f,
 body[data-theme="heroui"] .seg.f,
-body[data-theme="heroui"] .grab-meter .ticks i.c,
-body[data-theme="heroui"] .ticks i.c,
 body[data-theme="heroui"] .seg.c,
 body[data-theme="heroui"] .proj-h .d,
 body[data-theme="heroui"] .node .d,
 body[data-theme="heroui"] .rel-tnode-dot,
 body[data-theme="heroui"] .star i,
 body[data-theme="heroui"] .capsule .orb{box-shadow:none}
-body[data-theme="heroui"] .card-grab:hover{background:transparent}
 body[data-theme="heroui"] .capsule:not(.is-expanded):not(.menu-open) .cap-state{text-shadow:none}
 body[data-theme="heroui"] .project-pop,
 body[data-theme="heroui"] .card>.menu-pop,

@@ -20,6 +20,10 @@ scripts/compose_capsule.py
 .omx/
 src/.omc/
 src-tauri/.omc/
+.idea/
+.pi/
+.qoder/
+.agents/
 
 # Trellis 工作流与平台接入文件（本次分享不入库）
 .trellis/

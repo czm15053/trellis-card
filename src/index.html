@@ -85,29 +85,29 @@
     </div>
 
     <article class="card" id="card" data-kind="idle">
-      <!-- 顶部 header：蝴蝶灯 + 项目名纯文本 + 空白拖动区 + 进度条。
-           整体 data-tauri-drag-region：led/项目名/进度条周围背景可拖动；
-           项目名是纯 span，不拦截拖动；蝴蝶灯 pointer-events:none 穿透。 -->
-      <div class="card-grab flex shrink-0 h-[34px] w-full relative z-[5] items-center px-2.5 cursor-grab" data-tauri-drag-region title="拖动移动窗口">
-        <span class="grab-led" id="grabLed" aria-hidden="true" data-state="idle"></span>
-        <span class="grab-center">
-          <span class="grab-project" id="grabProjectName" title="当前项目">全部项目</span>
-        </span>
-        <span class="grab-meter" id="grabMeter" title="任务进度"><span class="ticks"><i></i><i></i><i></i><i></i></span><span class="score">—</span></span>
-      </div>
-      <!-- 顶栏：项目筛选 · List · Menu · Detail -->
-      <div class="card-topbar" id="cardTopbar">
-        <button type="button" class="proj-chip" id="btnProjectChip" aria-expanded="false" aria-controls="projectPop" title="筛选项目">
-          <span class="proj-chip-label" id="projectChipLabel">全部项目</span>
-          <span class="proj-chip-caret" aria-hidden="true"><svg class="lucide" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="icons.svg#i-chevron-down"/></svg></span>
+      <!-- 一体化控制顶栏 (38px)：项目切换（含LED） + 中段拖拽 + 高频操作 -->
+      <header class="card-unified-header" data-tauri-drag-region>
+        <!-- 左侧：项目切换下拉（含 LED 状态灯） -->
+        <button type="button" class="proj-select-chip proj-chip" id="btnProjectChip" aria-expanded="false" aria-controls="projectPop" title="切换项目">
+          <span class="grab-led" id="grabLed" aria-hidden="true" data-state="idle"></span>
+          <span class="proj-name-text proj-chip-label" id="projectChipLabel">全部项目</span>
+          <span class="proj-chip-caret" aria-hidden="true">
+            <svg class="lucide" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="icons.svg#i-chevron-down"/></svg>
+          </span>
         </button>
-        <div class="topbar-actions">
-          <button type="button" class="iconbtn" id="btnTree" title="任务列表（L）" aria-label="打开任务列表" aria-expanded="false" aria-controls="list"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-list"/></svg><span>列表</span></button>
-          <button type="button" class="iconbtn" id="btnRelations" title="任务关联" aria-label="打开任务关联" aria-expanded="false" aria-controls="relations"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-share-2"/></svg><span>关联</span></button>
-          <button type="button" class="iconbtn menubtn" id="btnMenu" title="观察菜单" aria-label="打开观察菜单" aria-expanded="false" aria-controls="menuPop"><svg class="lucide" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-menu"/></svg></button>
-          <button type="button" class="iconbtn flipbtn" id="btnFlip" title="详情" aria-label="打开任务详情"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-book-open"/></svg><span>详情</span></button>
-        </div>
-      </div>
+
+        <!-- 中段：自然拖拽区 -->
+        <div class="header-drag-space" data-tauri-drag-region></div>
+
+        <!-- 右侧：高频功能入口 -->
+        <nav class="topbar-quick-actions" aria-label="快捷操作">
+          <button type="button" class="iconbtn" id="btnTree" title="任务列表 (L)" aria-label="任务列表" aria-expanded="false" aria-controls="list"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-list"/></svg></button>
+          <button type="button" class="iconbtn" id="btnRelations" title="任务关联与规范" aria-label="任务关联" aria-expanded="false" aria-controls="relations"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-share-2"/></svg></button>
+          <button type="button" class="iconbtn pin-btn" id="btnQuickTop" title="始终置顶 (Pin)" aria-label="切换置顶" aria-pressed="false"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-pin"/></svg></button>
+          <button type="button" class="iconbtn cap-btn" id="btnQuickCapsule" title="收起为胶囊" aria-label="收起为胶囊"><svg class="lucide" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-minus"/></svg></button>
+          <button type="button" class="iconbtn menubtn" id="btnMenu" title="观察设置" aria-label="观察设置" aria-expanded="false" aria-controls="menuPop"><svg class="lucide" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="icons.svg#i-menu"/></svg></button>
+        </nav>
+      </header>
 
       <!-- 项目筛选 popover（与 Tree 顶栏同一 filter 数据源） -->
       <div class="project-pop" id="projectPop" hidden role="listbox" aria-label="筛选项目"></div>

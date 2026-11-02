@@ -869,6 +869,16 @@ fn open_url(url: String) -> Result<(), String> {
     open::that(&url).map_err(|error| format!("打开链接失败: {error}"))
 }
 
+/* 用系统默认程序打开本地文件或目录（校验存在性；跨平台：macOS open / Windows start / Linux xdg-open）。 */
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("文件不存在: {path}"));
+    }
+    open::that(&path).map_err(|error| format!("打开文件失败: {error}"))
+}
+
 #[tauri::command]
 fn list_projects(state: State<AppState>) -> Vec<scan::ProjectInfo> {
     cached_discover_all(&state)
@@ -1493,6 +1503,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_version,
             open_url,
+            open_path,
             get_config,
             complete_setup,
             pick_folder,
@@ -1552,6 +1563,14 @@ mod tests {
         assert_eq!(docs[3].name, "research/竞品.md");
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn open_path_rejects_nonexistent_file() {
+        let nonexistent = "/path/to/definitely/nonexistent/file.md";
+        let res = open_path(nonexistent.to_string());
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("文件不存在"));
     }
 
     fn fp_view(tool_input: Option<runtime::ToolActivityInput>) -> TaskRuntimeView {
